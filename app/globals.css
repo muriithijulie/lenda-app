@@ -96,3 +96,11 @@ td{padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;}
 .hero h1{font-family:'Syne',sans-serif;font-size:32px;font-weight:800;max-width:600px;margin:12px auto;}
 .hero p{color:var(--muted);font-size:15px;max-width:520px;margin:0 auto 22px;}
 .landing-wrap{max-width:900px;margin:0 auto;padding:32px 20px;}
+@media print{
+  .sidebar,.topbar,.toast,.btn-row,.card-action,.no-print{display:none !important;}
+  .main{margin-left:0 !important;}
+  .content{padding:0 !important;}
+  body{background:#fff !important;color:#000 !important;}
+  .card{border:1px solid #ccc !important;background:#fff !important;break-inside:avoid;}
+  .stat-row b,.mono{color:#000 !important;}
+}

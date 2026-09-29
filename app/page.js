@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { fmt, eligibility, daysUntil } from "../lib/eligibility";
+import { downloadCSV } from "../lib/csv";
 
 const NAV = [
   { section: "Overview", items: [["dashboard", "📊", "Dashboard"]] },
@@ -12,6 +13,7 @@ const NAV = [
       ["loans", "💵", "Loans"],
     ],
   },
+  { section: "Insights", items: [["reports", "📈", "Reports"]] },
   { section: "Setup", items: [["company", "🏢", "Company Setup"]] },
 ];
 const ALL_TABS = [
@@ -19,6 +21,7 @@ const ALL_TABS = [
   ["clients", "Clients"],
   ["rules", "Loan Rules"],
   ["loans", "Loans"],
+  ["reports", "Reports"],
   ["company", "Company Setup"],
 ];
 const EMPTY_RULES = { minIncome: 10000, maxMultiplier: 3, interestRatePct: 12, termMonths: 6, allowed: [] };
@@ -38,6 +41,7 @@ function badge(status) {
 export default function AdminApp() {
   const [page, setPage] = useState("dashboard");
   const [companyTab, setCompanyTab] = useState("profile");
+  const [reportsTab, setReportsTab] = useState("company");
   const [rules, setRules] = useState(EMPTY_RULES);
   const [clients, setClients] = useState([]);
   const [loans, setLoans] = useState([]);
@@ -196,7 +200,7 @@ export default function AdminApp() {
     showToast("Landing page saved");
   }
 
-  const pageTitle = { dashboard: "Dashboard", clients: "Clients", rules: "Loan Rules", loans: "Loans", company: "Company Setup" }[page];
+  const pageTitle = { dashboard: "Dashboard", clients: "Clients", rules: "Loan Rules", loans: "Loans", reports: "Reports", company: "Company Setup" }[page];
 
   return (
     <div className="app-shell">
@@ -241,6 +245,16 @@ export default function AdminApp() {
           {page === "clients" && <Clients clients={clients} rules={rules} onAdd={addClient} />}
           {page === "rules" && <Rules rules={rules} onSave={saveRules} />}
           {page === "loans" && <Loans loans={loans} clients={clients} onAction={loanAction} />}
+          {page === "reports" && (
+            <Reports
+              clients={clients}
+              loans={loans}
+              rules={rules}
+              company={company}
+              reportsTab={reportsTab}
+              setReportsTab={setReportsTab}
+            />
+          )}
           {page === "company" && (
             <Company
               companyTab={companyTab}
@@ -420,6 +434,199 @@ function Loans({ loans, clients, onAction }) {
         })}
       </tbody></table></div>
     </div>
+  );
+}
+
+function Reports({ clients, loans, rules, company, reportsTab, setReportsTab }) {
+  return (
+    <>
+      <div className="btn-row no-print" style={{ marginBottom: 18 }}>
+        <button className={`btn ${reportsTab === "company" ? "btn-green" : "btn-ghost"}`} onClick={() => setReportsTab("company")}>Company Reports</button>
+        <button className={`btn ${reportsTab === "client" ? "btn-green" : "btn-ghost"}`} onClick={() => setReportsTab("client")}>Client Reports</button>
+      </div>
+      {reportsTab === "company" ? (
+        <CompanyReport clients={clients} loans={loans} company={company} />
+      ) : (
+        <ClientReport clients={clients} loans={loans} rules={rules} company={company} />
+      )}
+    </>
+  );
+}
+
+function CompanyReport({ clients, loans, company }) {
+  const disbursed = loans.filter((l) => ["active", "closed"].includes(l.status));
+  const totalDisbursed = disbursed.reduce((s, l) => s + (l.amount || 0), 0);
+  const totalCollected = loans.reduce((s, l) => s + (l.paidSoFar || 0), 0);
+  const totalOutstanding = loans.filter((l) => l.status === "active").reduce((s, l) => s + ((l.totalDue || 0) - (l.paidSoFar || 0)), 0);
+  const interestEarned = loans.filter((l) => l.status === "closed").reduce((s, l) => s + ((l.totalDue || 0) - (l.amount || 0)), 0);
+  const interestExpected = loans.filter((l) => l.status === "active").reduce((s, l) => s + ((l.totalDue || 0) - (l.amount || 0)), 0);
+  const overdue = loans.filter((l) => l.status === "active" && daysUntil(l.dueDate) < 0);
+  const overdueAmount = overdue.reduce((s, l) => s + ((l.totalDue || 0) - (l.paidSoFar || 0)), 0);
+  const avgLoan = disbursed.length ? Math.round(totalDisbursed / disbursed.length) : 0;
+
+  const counts = { pending: 0, approved: 0, active: 0, closed: 0, rejected: 0 };
+  loans.forEach((l) => (counts[l.status] = (counts[l.status] || 0) + 1));
+  const totalLoans = loans.length || 1;
+  const colors = { pending: "var(--gold)", approved: "var(--blue)", active: "var(--green)", closed: "var(--muted)", rejected: "var(--error)" };
+
+  const byMonth = {};
+  loans.forEach((l) => {
+    const m = (l.appliedDate || "").slice(0, 7);
+    if (!m) return;
+    if (!byMonth[m]) byMonth[m] = { count: 0, amount: 0 };
+    byMonth[m].count += 1;
+    byMonth[m].amount += l.amount || 0;
+  });
+  const months = Object.keys(byMonth).sort();
+  const maxMonthAmount = Math.max(1, ...months.map((m) => byMonth[m].amount));
+
+  function exportCompanyCSV() {
+    const rows = [["Client", "Phone", "Amount", "Status", "Applied", "Due Date", "Paid", "Balance"]];
+    loans.forEach((l) => {
+      const c = clients.find((x) => x.id === l.clientId);
+      rows.push([
+        c ? c.name : "Unknown",
+        c ? c.phone : "",
+        l.amount,
+        l.status,
+        l.appliedDate || "",
+        l.dueDate || "",
+        l.paidSoFar || 0,
+        (l.totalDue || 0) - (l.paidSoFar || 0),
+      ]);
+    });
+    downloadCSV(`${(company.name || "lenda").replace(/\s+/g, "_")}_loan_report.csv`, rows);
+  }
+
+  return (
+    <>
+      <div className="card no-print" style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button className="btn btn-ghost" onClick={() => window.print()}>🖨️ Print</button>
+        <button className="btn btn-green" onClick={exportCompanyCSV}>⬇️ Export CSV</button>
+      </div>
+
+      <div style={{ marginBottom: 6 }}>
+        <div className="card-title" style={{ fontSize: 18 }}>{company.name || "LENDA"} — Portfolio Report</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>Generated {new Date().toLocaleString()}</div>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat green"><div className="stat-label">Total Disbursed</div><div className="stat-value mono">{fmt(totalDisbursed)}</div></div>
+        <div className="stat blue"><div className="stat-label">Total Collected</div><div className="stat-value mono">{fmt(totalCollected)}</div></div>
+        <div className="stat gold"><div className="stat-label">Outstanding</div><div className="stat-value mono">{fmt(totalOutstanding)}</div></div>
+        <div className="stat pink"><div className="stat-label">Overdue</div><div className="stat-value pink">{overdue.length} ({fmt(overdueAmount)})</div></div>
+        <div className="stat muted"><div className="stat-label">Interest Earned</div><div className="stat-value mono">{fmt(interestEarned)}</div></div>
+        <div className="stat muted"><div className="stat-label">Interest Expected</div><div className="stat-value mono">{fmt(interestExpected)}</div></div>
+        <div className="stat muted"><div className="stat-label">Avg. Loan Size</div><div className="stat-value mono">{fmt(avgLoan)}</div></div>
+        <div className="stat muted"><div className="stat-label">Total Clients</div><div className="stat-value">{clients.length}</div></div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div className="card-title">Loan Portfolio by Status</div></div>
+        {loans.length === 0 ? <div className="empty">No loans yet</div> : Object.entries(counts).map(([k, v]) => (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 12, minWidth: 70, textTransform: "capitalize" }}>{k}</div>
+            <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+              <div style={{ width: `${(v / totalLoans) * 100}%`, height: "100%", background: colors[k] }} />
+            </div>
+            <div className="mono" style={{ fontSize: 12, minWidth: 20, textAlign: "right" }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div className="card-title">Loans Disbursed by Month</div></div>
+        {months.length === 0 ? <div className="empty">No loan history yet</div> : months.map((m) => (
+          <div key={m} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div className="mono" style={{ fontSize: 12, minWidth: 64 }}>{m}</div>
+            <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+              <div style={{ width: `${(byMonth[m].amount / maxMonthAmount) * 100}%`, height: "100%", background: "var(--green)" }} />
+            </div>
+            <div className="mono" style={{ fontSize: 12, minWidth: 100, textAlign: "right" }}>{fmt(byMonth[m].amount)} ({byMonth[m].count})</div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ClientReport({ clients, loans, rules, company }) {
+  const [clientId, setClientId] = useState("");
+  const client = clients.find((c) => c.id === clientId);
+  const clientLoans = client ? loans.filter((l) => l.clientId === client.id) : [];
+
+  function exportClientCSV() {
+    const rows = [["Amount", "Status", "Applied", "Due Date", "Total Due", "Paid", "Balance"]];
+    clientLoans.forEach((l) => {
+      rows.push([l.amount, l.status, l.appliedDate || "", l.dueDate || "", l.totalDue || 0, l.paidSoFar || 0, (l.totalDue || 0) - (l.paidSoFar || 0)]);
+    });
+    downloadCSV(`${(client?.name || "client").replace(/\s+/g, "_")}_loan_history.csv`, rows);
+  }
+
+  const totalBorrowed = clientLoans.reduce((s, l) => s + (l.amount || 0), 0);
+  const totalRepaid = clientLoans.reduce((s, l) => s + (l.paidSoFar || 0), 0);
+  const e = client ? eligibility(client, rules) : null;
+
+  return (
+    <>
+      <div className="card no-print">
+        <div className="card-header"><div className="card-title">Select a Client</div></div>
+        <select value={clientId} onChange={(ev) => setClientId(ev.target.value)}>
+          <option value="">-- choose a client --</option>
+          {clients.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
+        </select>
+      </div>
+
+      {!client ? (
+        <div className="card empty">Select a client above to generate their report.</div>
+      ) : (
+        <>
+          <div className="card no-print" style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={() => window.print()}>🖨️ Print</button>
+            <button className="btn btn-green" onClick={exportClientCSV}>⬇️ Export CSV</button>
+          </div>
+
+          <div style={{ marginBottom: 6 }}>
+            <div className="card-title" style={{ fontSize: 18 }}>{company.name || "LENDA"} — Client Report</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>Generated {new Date().toLocaleString()}</div>
+          </div>
+
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: 12 }}>{client.name}</div>
+            <div className="stat-row"><span>Phone</span><b>{client.phone}</b></div>
+            <div className="stat-row"><span>National ID</span><b>{client.nationalId || "—"}</b></div>
+            <div className="stat-row"><span>Monthly income</span><b>{fmt(client.income)}</b></div>
+            <div className="stat-row"><span>Employment</span><b>{client.employment}</b></div>
+            <div className="stat-row"><span>Client since</span><b>{client.dateJoined || "—"}</b></div>
+            <div className="stat-row"><span>Current qualifying limit</span><b>{e.qualifies ? fmt(e.maxLoan) : "Not eligible"}</b></div>
+          </div>
+
+          <div className="stats-grid">
+            <div className="stat green"><div className="stat-label">Total Borrowed</div><div className="stat-value mono">{fmt(totalBorrowed)}</div></div>
+            <div className="stat blue"><div className="stat-label">Total Repaid</div><div className="stat-value mono">{fmt(totalRepaid)}</div></div>
+            <div className="stat muted"><div className="stat-label">Loans Taken</div><div className="stat-value">{clientLoans.length}</div></div>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><div className="card-title">Loan History</div></div>
+            <div className="tablewrap"><table><tbody>
+              <tr><th>Amount</th><th>Status</th><th>Applied</th><th>Due</th><th>Total Due</th><th>Paid</th><th>Balance</th></tr>
+              {clientLoans.length === 0 ? <tr><td colSpan={7} className="empty">No loans on record</td></tr> : clientLoans.map((l) => (
+                <tr key={l.id}>
+                  <td className="mono">{fmt(l.amount)}</td>
+                  <td>{badge(l.status)}</td>
+                  <td>{l.appliedDate || "—"}</td>
+                  <td>{l.dueDate || "—"}</td>
+                  <td className="mono">{l.totalDue ? fmt(l.totalDue) : "—"}</td>
+                  <td className="mono">{l.paidSoFar ? fmt(l.paidSoFar) : "—"}</td>
+                  <td className="mono">{l.totalDue ? fmt((l.totalDue || 0) - (l.paidSoFar || 0)) : "—"}</td>
+                </tr>
+              ))}
+            </tbody></table></div>
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
