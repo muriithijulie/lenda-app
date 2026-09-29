@@ -1,15 +1,40 @@
 import { getValue } from "../../lib/store";
+import AuthPanel from "../../components/AuthPanel";
 
 export const dynamic = "force-dynamic";
 
+const FALLBACK_COMPANY = { name: "Hambi Loans", logoEmoji: "💠" };
+const FALLBACK_LANDING = {
+  heroTitle: "Loans that fit your business",
+  heroSubtitle: "Apply in minutes. Get a decision fast.",
+  aboutText: "",
+  features: [],
+};
+const FALLBACK_PAYMENTS = {};
+
 export default async function LandingPage() {
-  const company = await getValue("company");
-  const landing = await getValue("landing");
-  const payments = await getValue("payments");
+  let company = FALLBACK_COMPANY;
+  let landing = FALLBACK_LANDING;
+  let payments = FALLBACK_PAYMENTS;
+  let loadError = "";
+
+  try {
+    [company, landing, payments] = await Promise.all([getValue("company"), getValue("landing"), getValue("payments")]);
+  } catch (err) {
+    loadError = err.message || "Could not load site content";
+  }
+
   const features = landing.features || [];
 
   return (
     <div className="landing-wrap">
+      {loadError && (
+        <div className="card" style={{ borderColor: "rgba(255,82,82,.4)" }}>
+          <div style={{ color: "var(--error)", fontSize: 12.5 }}>
+            Some site content couldn&apos;t load ({loadError}). You can still sign up or log in below.
+          </div>
+        </div>
+      )}
       <div className="hero">
         <div style={{ fontSize: 40, marginBottom: 10 }}>{company.logoEmoji || "💠"}</div>
         <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 15, color: "var(--green)", fontWeight: 800, letterSpacing: 1 }}>
@@ -17,10 +42,12 @@ export default async function LandingPage() {
         </div>
         <h1>{landing.heroTitle}</h1>
         <p>{landing.heroSubtitle}</p>
-        <a className="btn btn-green" style={{ padding: "12px 26px", display: "inline-block" }} href="/portal">
-          Apply for a Loan →
+        <a className="btn btn-green" style={{ padding: "12px 26px", display: "inline-block" }} href="#auth-panel">
+          Get Started →
         </a>
       </div>
+
+      <AuthPanel />
 
       <div className="card">
         <div style={{ fontSize: 14, lineHeight: 1.8, maxWidth: 700, margin: "0 auto", textAlign: "center" }}>{landing.aboutText}</div>

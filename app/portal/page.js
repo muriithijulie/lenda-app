@@ -1,87 +1,150 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { fmt, eligibility, daysUntil } from "../../lib/eligibility";
+import { getSupabaseBrowser } from "../../lib/supabaseBrowser";
 
 export default function PortalPage() {
-  const [clients, setClients] = useState([]);
+  const router = useRouter();
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [session, setSession] = useState(null);
+  const [client, setClient] = useState(null);
+  const [meError, setMeError] = useState("");
   const [loans, setLoans] = useState([]);
   const [rules, setRules] = useState(null);
-  const [currentId, setCurrentId] = useState("");
   const [amount, setAmount] = useState("");
-  const [msg, setMsg] = useState("");
+  const [applyError, setApplyError] = useState("");
   const [theme, setTheme] = useState("dark");
-
-  const refresh = () => {
-    Promise.all([
-      fetch("/api/clients").then((r) => r.json()),
-      fetch("/api/loans").then((r) => r.json()),
-      fetch("/api/rules").then((r) => r.json()),
-    ]).then(([c, l, r]) => {
-      setClients(c);
-      setLoans(l);
-      setRules(r);
-    });
-  };
 
   useEffect(() => {
     const saved = localStorage.getItem("lenda-theme") || "dark";
     setTheme(saved);
     document.documentElement.setAttribute("data-theme", saved);
-    refresh();
+
+    let supabase;
+    try {
+      supabase = getSupabaseBrowser();
+    } catch (err) {
+      setMeError(err.message);
+      setLoadingAuth(false);
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setLoadingAuth(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (session) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  async function authedFetch(url, opts = {}) {
+    const supabase = getSupabaseBrowser();
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    return fetch(url, {
+      ...opts,
+      headers: { ...(opts.headers || {}), Authorization: token ? `Bearer ${token}` : "" },
+    });
+  }
+
+  async function refresh() {
+    setMeError("");
+    try {
+      const [meRes, loansRes, rulesRes] = await Promise.all([
+        authedFetch("/api/me"),
+        authedFetch("/api/loans"),
+        authedFetch("/api/rules"),
+      ]);
+      if (meRes.ok) {
+        setClient(await meRes.json());
+      } else {
+        const d = await meRes.json().catch(() => ({}));
+        setMeError(d.error || "Could not load your profile");
+        setClient(null);
+      }
+      setLoans(loansRes.ok ? await loansRes.json() : []);
+      setRules(rulesRes.ok ? await rulesRes.json() : null);
+    } catch (err) {
+      setMeError("Could not reach the server. Please try again shortly.");
+    }
+  }
 
   function toggleTheme() {
     const next = theme === "light" ? "dark" : "light";
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
-    try { localStorage.setItem("lenda-theme", next); } catch (e) {}
+    try {
+      localStorage.setItem("lenda-theme", next);
+    } catch (e) {}
   }
 
-  if (!rules) return <div className="landing-wrap"><div className="empty">Loading…</div></div>;
-
-  const client = clients.find((c) => c.id === currentId);
+  async function signOut() {
+    const supabase = getSupabaseBrowser();
+    await supabase.auth.signOut();
+    router.push("/landing");
+  }
 
   async function applyLoan(e) {
     e.preventDefault();
-    setMsg("");
-    const res = await fetch("/api/loans", {
+    setApplyError("");
+    const res = await authedFetch("/api/loans", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: client.id, amount: Number(amount) }),
+      body: JSON.stringify({ amount: Number(amount) }),
     });
     const data = await res.json();
     if (res.ok) {
-      setMsg("");
       setAmount("");
       refresh();
     } else {
-      setMsg(data.error || "Could not submit application");
+      setApplyError(data.error || "Could not submit application");
     }
+  }
+
+  if (loadingAuth) {
+    return (
+      <div className="landing-wrap">
+        <div className="empty">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="landing-wrap">
+        <div className="card" style={{ textAlign: "center" }}>
+          <div className="card-title" style={{ marginBottom: 10 }}>You need to sign in</div>
+          <div style={{ color: "var(--muted)", fontSize: 13.5, marginBottom: 16 }}>
+            {meError || "Sign up or log in from the landing page to see your loan status."}
+          </div>
+          <a className="btn btn-green" href="/landing#auth-panel">Go to Sign In / Sign Up</a>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="landing-wrap">
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
         <button className="btn btn-ghost" onClick={toggleTheme}>{theme === "light" ? "☀️" : "🌙"}</button>
-      </div>
-      <div className="card">
-        <div className="card-header"><div className="card-title">🙋 Client Login (demo)</div></div>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
-          Prototype login by selecting a registered profile — a live system needs real authentication.
-        </div>
-        <select value={currentId} onChange={(e) => setCurrentId(e.target.value)}>
-          <option value="">-- select your profile --</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
-        </select>
+        <button className="btn btn-ghost" onClick={signOut}>Log Out</button>
       </div>
 
-      {!client && (
-        <div className="card empty">{clients.length === 0 ? "Ask staff to register you first." : "Select your profile above."}</div>
-      )}
-
-      {client && (() => {
+      {meError ? (
+        <div className="card empty">{meError} — please contact support if this doesn&apos;t resolve.</div>
+      ) : !client || !rules ? (
+        <div className="empty">Loading your account…</div>
+      ) : (() => {
         const e = eligibility(client, rules);
-        const loan = loans.filter((l) => l.clientId === client.id)[0];
+        const loan = loans[0]; // already scoped to this client, most recent first
         return (
           <>
             <div className="card">
@@ -98,7 +161,7 @@ export default function PortalPage() {
                   <form onSubmit={applyLoan}>
                     <label>Amount requested (max {fmt(e.maxLoan)})</label>
                     <input type="number" max={e.maxLoan} value={amount} onChange={(ev) => setAmount(ev.target.value)} />
-                    {msg && <div style={{ color: "var(--error)", fontSize: 12.5, marginBottom: 10 }}>{msg}</div>}
+                    {applyError && <div style={{ color: "var(--error)", fontSize: 12.5, marginBottom: 10 }}>{applyError}</div>}
                     <button className="btn btn-green" type="submit">Submit Application</button>
                   </form>
                 ) : (
