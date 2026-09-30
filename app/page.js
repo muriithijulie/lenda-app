@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { fmt, eligibility, daysUntil } from "../lib/eligibility";
 import { downloadCSV } from "../lib/csv";
 
@@ -13,7 +14,14 @@ const NAV = [
       ["loans", "💵", "Loans"],
     ],
   },
-  { section: "Insights", items: [["reports", "📈", "Reports"]] },
+  {
+    section: "Insights",
+    items: [
+      ["reports", "📈", "Reports"],
+      ["risk", "⚠️", "Risk"],
+    ],
+  },
+  { section: "Engage", items: [["comms", "📨", "Communications"]] },
   { section: "Setup", items: [["company", "🏢", "Company Setup"]] },
 ];
 const ALL_TABS = [
@@ -22,20 +30,34 @@ const ALL_TABS = [
   ["rules", "Loan Rules"],
   ["loans", "Loans"],
   ["reports", "Reports"],
+  ["risk", "Risk"],
+  ["comms", "Communications"],
   ["company", "Company Setup"],
 ];
 const EMPTY_RULES = { minIncome: 10000, maxMultiplier: 3, interestRatePct: 12, termMonths: 6, allowed: [] };
+const STATUS_COLORS = { pending: "#FFD740", reviewing: "#FF4081", approved: "#40C4FF", active: "#00E676", closed: "#5C7A99", rejected: "#FF5252" };
 
 function badge(status) {
   const map = {
     pending: ["b-pending", "Pending"],
-    approved: ["b-approved", "Approved"],
+    reviewing: ["b-reviewing", "In Review"],
+    approved: ["b-approved", "Awarded"],
     active: ["b-active", "Active"],
-    closed: ["b-closed", "Closed"],
+    closed: ["b-closed", "Paid"],
     rejected: ["b-rejected", "Rejected"],
   };
   const [cls, label] = map[status] || ["b-pending", status];
   return <span className={`badge ${cls}`}>{label}</span>;
+}
+
+// A client's current loan is whichever one isn't in a closed/rejected end
+// state, or failing that their most recent one — used for the Clients page
+// inline status column.
+function currentLoanFor(clientId, loans) {
+  const mine = loans.filter((l) => l.clientId === clientId);
+  if (mine.length === 0) return null;
+  const open = mine.find((l) => !["closed", "rejected"].includes(l.status));
+  return open || mine[0];
 }
 
 export default function AdminApp() {
@@ -49,6 +71,8 @@ export default function AdminApp() {
   const [company, setCompany] = useState({});
   const [payments, setPayments] = useState({});
   const [activity, setActivity] = useState([]);
+  const [communications, setCommunications] = useState([]);
+  const [commsPrefillClientId, setCommsPrefillClientId] = useState(null);
   const [toast, setToast] = useState(null);
   const [theme, setTheme] = useState("dark");
 
@@ -58,7 +82,7 @@ export default function AdminApp() {
   };
 
   const refreshAll = useCallback(async () => {
-    const [r, c, l, s, co, p, a] = await Promise.all([
+    const [r, c, l, s, co, p, a, cm] = await Promise.all([
       fetch("/api/rules").then((r) => r.json()),
       fetch("/api/clients").then((r) => r.json()),
       fetch("/api/loans").then((r) => r.json()),
@@ -66,6 +90,7 @@ export default function AdminApp() {
       fetch("/api/company").then((r) => r.json()),
       fetch("/api/payments").then((r) => r.json()),
       fetch("/api/activity").then((r) => r.json()),
+      fetch("/api/communications").then((r) => r.json()),
     ]);
     setRules(r);
     setClients(c);
@@ -74,6 +99,7 @@ export default function AdminApp() {
     setCompany(co);
     setPayments(p);
     setActivity(a);
+    setCommunications(cm);
   }, []);
 
   useEffect(() => {
@@ -132,6 +158,21 @@ export default function AdminApp() {
       showToast("Updated");
       refreshAll();
     } else showToast((await res.json()).error || "Failed");
+  }
+
+  async function sendComms(clientIds, message, template) {
+    const res = await fetch("/api/communications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientIds, message, template }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`Reminder sent to ${data.sent} client${data.sent === 1 ? "" : "s"}`);
+      refreshAll();
+    } else {
+      showToast(data.error || "Could not send reminder");
+    }
   }
 
   async function saveCompany(e) {
@@ -200,7 +241,7 @@ export default function AdminApp() {
     showToast("Landing page saved");
   }
 
-  const pageTitle = { dashboard: "Dashboard", clients: "Clients", rules: "Loan Rules", loans: "Loans", reports: "Reports", company: "Company Setup" }[page];
+  const pageTitle = { dashboard: "Dashboard", clients: "Clients", rules: "Loan Rules", loans: "Loans", reports: "Reports", risk: "Risk", comms: "Communications", company: "Company Setup" }[page];
 
   return (
     <div className="app-shell">
@@ -242,7 +283,7 @@ export default function AdminApp() {
           {page === "dashboard" && (
             <Dashboard clients={clients} loans={loans} activity={activity} rules={rules} setPage={setPage} />
           )}
-          {page === "clients" && <Clients clients={clients} rules={rules} onAdd={addClient} />}
+          {page === "clients" && <Clients clients={clients} loans={loans} rules={rules} onAdd={addClient} />}
           {page === "rules" && <Rules rules={rules} onSave={saveRules} />}
           {page === "loans" && <Loans loans={loans} clients={clients} onAction={loanAction} />}
           {page === "reports" && (
@@ -253,6 +294,26 @@ export default function AdminApp() {
               company={company}
               reportsTab={reportsTab}
               setReportsTab={setReportsTab}
+            />
+          )}
+          {page === "risk" && (
+            <Risk
+              clients={clients}
+              loans={loans}
+              onGoToComms={(clientId) => {
+                setCommsPrefillClientId(clientId);
+                setPage("comms");
+              }}
+            />
+          )}
+          {page === "comms" && (
+            <Communications
+              clients={clients}
+              loans={loans}
+              communications={communications}
+              onSend={sendComms}
+              prefillClientId={commsPrefillClientId}
+              clearPrefill={() => setCommsPrefillClientId(null)}
             />
           )}
           {page === "company" && (
@@ -281,10 +342,19 @@ function Dashboard({ clients, loans, activity, rules, setPage }) {
   const totalDisbursed = loans.filter((l) => ["active", "closed"].includes(l.status)).reduce((s, l) => s + (l.amount || 0), 0);
   const overdue = loans.filter((l) => l.status === "active" && daysUntil(l.dueDate) < 0).length;
   const pending = loans.filter((l) => l.status === "pending").length;
-  const counts = { pending: 0, approved: 0, active: 0, closed: 0, rejected: 0 };
+  const counts = { pending: 0, reviewing: 0, approved: 0, active: 0, closed: 0, rejected: 0 };
   loans.forEach((l) => (counts[l.status] = (counts[l.status] || 0) + 1));
-  const total = loans.length || 1;
-  const colors = { pending: "var(--gold)", approved: "var(--blue)", active: "var(--green)", closed: "var(--muted)", rejected: "var(--error)" };
+  const pieData = Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => ({ name: badgeLabel(k), key: k, value: v }));
+
+  const byMonth = {};
+  loans.forEach((l) => {
+    const m = (l.appliedDate || "").slice(0, 7);
+    if (!m) return;
+    if (!byMonth[m]) byMonth[m] = { month: m, amount: 0, count: 0 };
+    byMonth[m].amount += l.amount || 0;
+    byMonth[m].count += 1;
+  });
+  const barData = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
 
   return (
     <>
@@ -309,16 +379,38 @@ function Dashboard({ clients, loans, activity, rules, setPage }) {
         </div>
         <div className="card">
           <div className="card-header"><div className="card-title">🥧 Loan Portfolio</div></div>
-          {loans.length === 0 ? <div className="empty">No loans yet</div> : Object.entries(counts).map(([k, v]) => (
-            <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-              <div style={{ fontSize: 12, minWidth: 70, textTransform: "capitalize" }}>{k}</div>
-              <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 8, overflow: "hidden" }}>
-                <div style={{ width: `${(v / total) * 100}%`, height: "100%", background: colors[k] }} />
-              </div>
-              <div className="mono" style={{ fontSize: 12, minWidth: 20, textAlign: "right" }}>{v}</div>
+          {pieData.length === 0 ? <div className="empty">No loans yet</div> : (
+            <div className="chart-wrap">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={85} paddingAngle={2}>
+                    {pieData.map((d) => <Cell key={d.key} fill={STATUS_COLORS[d.key]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: "var(--muted)" }} />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
-          ))}
+          )}
         </div>
+      </div>
+      <div className="card">
+        <div className="card-header"><div className="card-title">📊 Disbursements, Last 6 Months</div></div>
+        {barData.length === 0 ? <div className="empty">No loan history yet</div> : (
+          <div className="chart-wrap">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={barData}>
+                <XAxis dataKey="month" stroke="var(--muted)" fontSize={11} />
+                <YAxis stroke="var(--muted)" fontSize={11} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                <Tooltip
+                  contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
+                  formatter={(v) => fmt(v)}
+                />
+                <Bar dataKey="amount" fill="#00E676" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </div>
       <div className="card">
         <div className="card-header"><div className="card-title">⚡ Recent Activity</div></div>
@@ -332,14 +424,19 @@ function Dashboard({ clients, loans, activity, rules, setPage }) {
       <div className="card" style={{ borderColor: "rgba(255,215,64,.3)" }}>
         <div className="card-title" style={{ color: "var(--gold)", marginBottom: 6 }}>⚠️ Deployment notice</div>
         <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>
-          Data is stored in a JSON file on the server (<code>data/store.json</code>). This works well on Render (persistent disk) but resets between deploys on Vercel&apos;s serverless filesystem — for production on Vercel, swap <code>lib/store.js</code> for a real database (Postgres, Supabase, etc). Client portal login is a demo picker, not real authentication.
+          Client portal login is real (Supabase Auth), but staff sign-in isn&apos;t built yet — this admin dashboard has no login of its own. Anyone with the URL can reach it. Add authentication here before this goes fully live with real client data.
         </div>
       </div>
     </>
   );
 }
 
-function Clients({ clients, rules, onAdd }) {
+function badgeLabel(status) {
+  const map = { pending: "Pending", reviewing: "In Review", approved: "Awarded", active: "Active", closed: "Paid", rejected: "Rejected" };
+  return map[status] || status;
+}
+
+function Clients({ clients, loans, rules, onAdd }) {
   return (
     <>
       <div className="card">
@@ -361,14 +458,21 @@ function Clients({ clients, rules, onAdd }) {
       <div className="card">
         <div className="card-header"><div className="card-title">👥 All Clients</div></div>
         <div className="tablewrap"><table><tbody>
-          <tr><th>Name</th><th>Phone</th><th>National ID</th><th>Income</th><th>Employment</th><th>Eligible Limit</th></tr>
-          {clients.length === 0 ? <tr><td colSpan={6} className="empty">No clients registered yet</td></tr> : clients.map((c) => {
+          <tr><th>Name</th><th>Phone</th><th>Income</th><th>Eligible Limit</th><th>Loan Status</th><th>Amount Awarded</th><th>Paid So Far</th><th>Amount Due</th></tr>
+          {clients.length === 0 ? <tr><td colSpan={8} className="empty">No clients registered yet</td></tr> : clients.map((c) => {
             const e = eligibility(c, rules);
+            const loan = currentLoanFor(c.id, loans);
+            const awarded = loan && loan.totalDue ? loan.amount : null;
+            const due = loan && loan.totalDue ? loan.totalDue - (loan.paidSoFar || 0) : null;
             return (
               <tr key={c.id}>
-                <td>{c.name}</td><td className="mono">{c.phone}</td><td className="mono">{c.nationalId || "—"}</td>
-                <td className="mono">{fmt(c.income)}</td><td>{c.employment}</td>
+                <td>{c.name}</td><td className="mono">{c.phone}</td>
+                <td className="mono">{fmt(c.income)}</td>
                 <td>{e.qualifies ? fmt(e.maxLoan) : <span style={{ color: "var(--error)" }}>Not eligible</span>}</td>
+                <td>{loan ? badge(loan.status) : <span className="mono" style={{ color: "var(--muted)" }}>No loan</span>}</td>
+                <td className="mono">{awarded !== null ? fmt(awarded) : "—"}</td>
+                <td className="mono">{loan && loan.totalDue ? fmt(loan.paidSoFar || 0) : "—"}</td>
+                <td className="mono">{due !== null ? fmt(due) : "—"}</td>
               </tr>
             );
           })}
@@ -415,11 +519,12 @@ function Loans({ loans, clients, onAction }) {
               <td className="mono">{fmt(l.amount)}</td>
               <td>{badge(l.status)}</td>
               <td>{l.dueDate ? l.dueDate + (d !== null ? ` (${d >= 0 ? d + "d left" : "overdue"})` : "") : "—"}</td>
-              <td className="mono">{["pending", "rejected"].includes(l.status) ? "—" : `${fmt(l.paidSoFar)} / ${fmt(l.totalDue)}`}</td>
+              <td className="mono">{["pending", "reviewing", "rejected"].includes(l.status) ? "—" : `${fmt(l.paidSoFar)} / ${fmt(l.totalDue)}`}</td>
               <td>
                 <div className="btn-row">
-                  {l.status === "pending" && <>
-                    <button className="btn btn-green" onClick={() => onAction(l.id, "approve")}>Approve</button>
+                  {l.status === "pending" && <button className="btn btn-ghost" onClick={() => onAction(l.id, "review")}>Start Review</button>}
+                  {(l.status === "pending" || l.status === "reviewing") && <>
+                    <button className="btn btn-green" onClick={() => onAction(l.id, "approve")}>Award</button>
                     <button className="btn btn-error" onClick={() => onAction(l.id, "reject")}>Reject</button>
                   </>}
                   {l.status === "approved" && <button className="btn btn-green" onClick={() => onAction(l.id, "disburse")}>Disburse</button>}
@@ -464,21 +569,19 @@ function CompanyReport({ clients, loans, company }) {
   const overdueAmount = overdue.reduce((s, l) => s + ((l.totalDue || 0) - (l.paidSoFar || 0)), 0);
   const avgLoan = disbursed.length ? Math.round(totalDisbursed / disbursed.length) : 0;
 
-  const counts = { pending: 0, approved: 0, active: 0, closed: 0, rejected: 0 };
+  const counts = { pending: 0, reviewing: 0, approved: 0, active: 0, closed: 0, rejected: 0 };
   loans.forEach((l) => (counts[l.status] = (counts[l.status] || 0) + 1));
-  const totalLoans = loans.length || 1;
-  const colors = { pending: "var(--gold)", approved: "var(--blue)", active: "var(--green)", closed: "var(--muted)", rejected: "var(--error)" };
+  const pieData = Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => ({ name: badgeLabel(k), key: k, value: v }));
 
   const byMonth = {};
   loans.forEach((l) => {
     const m = (l.appliedDate || "").slice(0, 7);
     if (!m) return;
-    if (!byMonth[m]) byMonth[m] = { count: 0, amount: 0 };
+    if (!byMonth[m]) byMonth[m] = { month: m, count: 0, amount: 0 };
     byMonth[m].count += 1;
     byMonth[m].amount += l.amount || 0;
   });
-  const months = Object.keys(byMonth).sort();
-  const maxMonthAmount = Math.max(1, ...months.map((m) => byMonth[m].amount));
+  const barData = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
 
   function exportCompanyCSV() {
     const rows = [["Client", "Phone", "Amount", "Status", "Applied", "Due Date", "Paid", "Balance"]];
@@ -523,28 +626,38 @@ function CompanyReport({ clients, loans, company }) {
 
       <div className="card">
         <div className="card-header"><div className="card-title">Loan Portfolio by Status</div></div>
-        {loans.length === 0 ? <div className="empty">No loans yet</div> : Object.entries(counts).map(([k, v]) => (
-          <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <div style={{ fontSize: 12, minWidth: 70, textTransform: "capitalize" }}>{k}</div>
-            <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 8, overflow: "hidden" }}>
-              <div style={{ width: `${(v / totalLoans) * 100}%`, height: "100%", background: colors[k] }} />
-            </div>
-            <div className="mono" style={{ fontSize: 12, minWidth: 20, textAlign: "right" }}>{v}</div>
+        {pieData.length === 0 ? <div className="empty">No loans yet</div> : (
+          <div className="chart-wrap">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={85} paddingAngle={2}>
+                  {pieData.map((d) => <Cell key={d.key} fill={STATUS_COLORS[d.key]} />)}
+                </Pie>
+                <Tooltip contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 11, color: "var(--muted)" }} />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
-        ))}
+        )}
       </div>
 
       <div className="card">
         <div className="card-header"><div className="card-title">Loans Disbursed by Month</div></div>
-        {months.length === 0 ? <div className="empty">No loan history yet</div> : months.map((m) => (
-          <div key={m} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <div className="mono" style={{ fontSize: 12, minWidth: 64 }}>{m}</div>
-            <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 8, overflow: "hidden" }}>
-              <div style={{ width: `${(byMonth[m].amount / maxMonthAmount) * 100}%`, height: "100%", background: "var(--green)" }} />
-            </div>
-            <div className="mono" style={{ fontSize: 12, minWidth: 100, textAlign: "right" }}>{fmt(byMonth[m].amount)} ({byMonth[m].count})</div>
+        {barData.length === 0 ? <div className="empty">No loan history yet</div> : (
+          <div className="chart-wrap">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={barData}>
+                <XAxis dataKey="month" stroke="var(--muted)" fontSize={11} />
+                <YAxis stroke="var(--muted)" fontSize={11} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                <Tooltip
+                  contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
+                  formatter={(v) => fmt(v)}
+                />
+                <Bar dataKey="amount" fill="#00E676" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-        ))}
+        )}
       </div>
     </>
   );
@@ -626,6 +739,192 @@ function ClientReport({ clients, loans, rules, company }) {
           </div>
         </>
       )}
+    </>
+  );
+}
+
+const STALE_PAYMENT_DAYS = 30;
+const DUE_SOON_DAYS = 7;
+
+function riskInfo(loan) {
+  const d = daysUntil(loan.dueDate);
+  const balance = (loan.totalDue || 0) - (loan.paidSoFar || 0);
+  const overdue = loan.status === "active" && d !== null && d < 0 && balance > 0;
+  const dueSoon = loan.status === "active" && d !== null && d >= 0 && d <= DUE_SOON_DAYS && balance > 0;
+  const lastPayment = loan.payments && loan.payments.length ? loan.payments[loan.payments.length - 1].date : null;
+  const daysSinceLastPayment = lastPayment ? Math.floor((new Date() - new Date(lastPayment)) / 86400000) : null;
+  const daysSinceDisbursed = loan.disbursedDate ? Math.floor((new Date() - new Date(loan.disbursedDate)) / 86400000) : null;
+  const stopped =
+    loan.status === "active" &&
+    balance > 0 &&
+    ((lastPayment === null && daysSinceDisbursed !== null && daysSinceDisbursed > STALE_PAYMENT_DAYS) ||
+      (daysSinceLastPayment !== null && daysSinceLastPayment > STALE_PAYMENT_DAYS));
+  return { overdue, dueSoon, stopped, daysOverdue: d !== null && d < 0 ? -d : 0, daysSinceLastPayment, balance };
+}
+
+function Risk({ clients, loans, onGoToComms }) {
+  const rows = loans
+    .filter((l) => l.status === "active")
+    .map((l) => ({ loan: l, client: clients.find((c) => c.id === l.clientId), risk: riskInfo(l) }))
+    .filter((r) => r.client);
+
+  const overdue = rows.filter((r) => r.risk.overdue);
+  const dueSoon = rows.filter((r) => r.risk.dueSoon);
+  const stopped = rows.filter((r) => r.risk.stopped);
+
+  function Section({ title, icon, items, note }) {
+    return (
+      <div className="card">
+        <div className="card-header"><div className="card-title">{icon} {title} ({items.length})</div></div>
+        {note && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>{note}</div>}
+        {items.length === 0 ? <div className="empty">None right now</div> : (
+          <div className="tablewrap"><table><tbody>
+            <tr><th>Client</th><th>Phone</th><th>Amount Due</th><th>Detail</th><th>Action</th></tr>
+            {items.map(({ loan, client, risk }) => (
+              <tr key={loan.id}>
+                <td>{client.name}</td>
+                <td className="mono">{client.phone}</td>
+                <td className="mono">{fmt(risk.balance)}</td>
+                <td style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                  {risk.overdue && `${risk.daysOverdue} day${risk.daysOverdue === 1 ? "" : "s"} overdue`}
+                  {!risk.overdue && risk.dueSoon && `Due ${loan.dueDate}`}
+                  {!risk.overdue && !risk.dueSoon && risk.stopped && (
+                    risk.daysSinceLastPayment !== null
+                      ? `No payment in ${risk.daysSinceLastPayment} days`
+                      : "No payment received yet"
+                  )}
+                </td>
+                <td><button className="btn btn-ghost" onClick={() => onGoToComms(client.id)}>Send Reminder</button></td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <Section title="Overdue" icon="🔴" items={overdue} />
+      <Section title="Due Soon" icon="🟡" items={dueSoon} note={`Due within the next ${DUE_SOON_DAYS} days.`} />
+      <Section
+        title="Stopped Paying"
+        icon="🚩"
+        items={stopped}
+        note={`No payment recorded in over ${STALE_PAYMENT_DAYS} days, based on the payment log. Loans awarded before this feature was added won't have a payment history yet, so this list will fill in as new payments are recorded.`}
+      />
+    </>
+  );
+}
+
+const REMINDER_TEMPLATES = {
+  due_soon: (client, loan) =>
+    `Hi ${client.name}, this is a reminder that your loan payment of ${fmt((loan?.totalDue || 0) - (loan?.paidSoFar || 0))} is due on ${loan?.dueDate || "your due date"}. Please make your payment on time to stay in good standing.`,
+  overdue: (client, loan) =>
+    `Hi ${client.name}, your loan payment of ${fmt((loan?.totalDue || 0) - (loan?.paidSoFar || 0))} was due on ${loan?.dueDate || "your due date"} and is now overdue. Please make your payment as soon as possible.`,
+  custom: () => "",
+};
+
+function Communications({ clients, loans, communications, onSend, prefillClientId, clearPrefill }) {
+  const [audience, setAudience] = useState("single");
+  const [clientId, setClientId] = useState("");
+  const [template, setTemplate] = useState("due_soon");
+  const [message, setMessage] = useState(REMINDER_TEMPLATES.due_soon({ name: "there" }, null));
+
+  useEffect(() => {
+    if (prefillClientId) {
+      setAudience("single");
+      setClientId(prefillClientId);
+      clearPrefill();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillClientId]);
+
+  function applyTemplate(key, forClient) {
+    setTemplate(key);
+    const client = forClient || clients.find((c) => c.id === clientId) || { name: "there" };
+    const loan = currentLoanFor(client.id, loans);
+    setMessage(REMINDER_TEMPLATES[key](client, loan));
+  }
+
+  function targetClientIds() {
+    if (audience === "single") return clientId ? [clientId] : [];
+    if (audience === "overdue") return loans.filter((l) => l.status === "active" && daysUntil(l.dueDate) < 0).map((l) => l.clientId);
+    if (audience === "dueSoon") return loans.filter((l) => l.status === "active" && daysUntil(l.dueDate) >= 0 && daysUntil(l.dueDate) <= DUE_SOON_DAYS).map((l) => l.clientId);
+    if (audience === "active") return loans.filter((l) => l.status === "active").map((l) => l.clientId);
+    return [];
+  }
+
+  function handleSend(e) {
+    e.preventDefault();
+    const ids = [...new Set(targetClientIds())];
+    if (ids.length === 0) return;
+    onSend(ids, message, template);
+  }
+
+  const recipientCount = new Set(targetClientIds()).size;
+
+  return (
+    <>
+      <div className="card">
+        <div className="card-header"><div className="card-title">📨 Send a Reminder</div></div>
+        <form onSubmit={handleSend}>
+          <label>Audience</label>
+          <select value={audience} onChange={(e) => setAudience(e.target.value)}>
+            <option value="single">Single client</option>
+            <option value="overdue">All overdue clients</option>
+            <option value="dueSoon">All clients due soon (next {DUE_SOON_DAYS} days)</option>
+            <option value="active">All clients with an active loan</option>
+          </select>
+
+          {audience === "single" && (
+            <>
+              <label>Client</label>
+              <select value={clientId} onChange={(e) => { setClientId(e.target.value); applyTemplate(template, clients.find((c) => c.id === e.target.value)); }}>
+                <option value="">-- choose a client --</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
+              </select>
+            </>
+          )}
+
+          <label>Template</label>
+          <div className="btn-row" style={{ marginBottom: 12 }}>
+            <button type="button" className={`btn ${template === "due_soon" ? "btn-green" : "btn-ghost"}`} onClick={() => applyTemplate("due_soon")}>Payment Due Soon</button>
+            <button type="button" className={`btn ${template === "overdue" ? "btn-green" : "btn-ghost"}`} onClick={() => applyTemplate("overdue")}>Payment Overdue</button>
+            <button type="button" className={`btn ${template === "custom" ? "btn-green" : "btn-ghost"}`} onClick={() => { setTemplate("custom"); setMessage(""); }}>Custom</button>
+          </div>
+
+          <label>Message</label>
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={4}
+            style={{ width: "100%", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, padding: 10, color: "var(--text)", fontFamily: "'DM Sans',sans-serif", fontSize: 13, marginBottom: 10 }}
+          />
+
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+            Will send to {recipientCount} client{recipientCount === 1 ? "" : "s"}. This logs the reminder here — it doesn&apos;t yet dispatch a real SMS/email/WhatsApp message (see README to wire up a provider).
+          </div>
+          <button className="btn btn-green" type="submit" disabled={recipientCount === 0 || !message.trim()}>Send Reminder</button>
+        </form>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div className="card-title">📜 Reminder Log</div></div>
+        {communications.length === 0 ? <div className="empty">No reminders sent yet</div> : (
+          <div className="tablewrap"><table><tbody>
+            <tr><th>Client</th><th>Template</th><th>Message</th><th>Sent</th></tr>
+            {communications.map((c) => (
+              <tr key={c.id}>
+                <td>{c.clientName}</td>
+                <td style={{ textTransform: "capitalize" }}>{(c.template || "custom").replace("_", " ")}</td>
+                <td style={{ maxWidth: 320, whiteSpace: "normal" }}>{c.message}</td>
+                <td className="mono">{new Date(c.sentAt).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        )}
+      </div>
     </>
   );
 }

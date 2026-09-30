@@ -67,6 +67,8 @@ td{padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;}
 .b-active{background:rgba(0,230,118,.12);color:var(--green);}
 .b-closed{background:rgba(92,122,153,.15);color:var(--muted);}
 .b-rejected{background:rgba(255,82,82,.12);color:var(--error);}
+.b-reviewing{background:rgba(255,64,129,.12);color:var(--pink);}
+.chart-wrap{width:100%;height:260px;}
 .activity-item{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);}
 .activity-item:last-child{border-bottom:none;}
 .activity-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;}

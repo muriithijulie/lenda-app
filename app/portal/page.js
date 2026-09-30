@@ -181,12 +181,12 @@ export default function PortalPage() {
 }
 
 function LoanStatus({ loan }) {
-  const stages = ["pending", "approved", "active", "closed"];
+  const stages = ["pending", "reviewing", "approved", "active", "closed"];
   const idx = loan.status === "rejected" ? -1 : stages.indexOf(loan.status);
   const bal = (loan.totalDue || 0) - (loan.paidSoFar || 0);
   const pct = loan.totalDue ? Math.min(100, Math.round((loan.paidSoFar / loan.totalDue) * 100)) : 0;
   const d = daysUntil(loan.dueDate);
-  const labels = ["Applied", "Approved", "Disbursed & Repaying", "Closed"];
+  const labels = ["Applied", "In Review", "Awarded", "Disbursed & Repaying", "Paid"];
 
   return (
     <div className="card">
