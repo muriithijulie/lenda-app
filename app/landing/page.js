@@ -1,5 +1,6 @@
 import { getValue } from "../../lib/store";
 import AuthPanel from "../../components/AuthPanel";
+import { DEFAULT_PORTAL_THEME } from "../../lib/theme";
 
 export const dynamic = "force-dynamic";
 
@@ -16,18 +17,36 @@ export default async function LandingPage() {
   let company = FALLBACK_COMPANY;
   let landing = FALLBACK_LANDING;
   let payments = FALLBACK_PAYMENTS;
+  let theme = DEFAULT_PORTAL_THEME;
   let loadError = "";
 
   try {
-    [company, landing, payments] = await Promise.all([getValue("company"), getValue("landing"), getValue("payments")]);
+    const [companyData, landingData, paymentsData, themeData] = await Promise.all([
+      getValue("company"),
+      getValue("landing"),
+      getValue("payments"),
+      getValue("theme"),
+    ]);
+    company = companyData;
+    landing = landingData;
+    payments = paymentsData;
+    if (themeData?.portal) theme = themeData.portal;
   } catch (err) {
     loadError = err.message || "Could not load site content";
   }
 
   const features = landing.features || [];
+  const rootStyle = {
+    "--accent": theme.accent || "#00E676",
+    "--font-main": theme.font || "'DM Sans', sans-serif",
+    ...(theme.backgroundColor ? { "--bg": theme.backgroundColor } : {}),
+  };
 
   return (
-    <div className="landing-wrap">
+    <div className="landing-wrap" data-theme={theme.mode || "dark"} data-card-style={theme.cardStyle || "default"} style={rootStyle}>
+      {theme.backgroundImage && (
+        <style>{`body{background-image:url('${theme.backgroundImage}');background-size:cover;background-position:center;background-attachment:fixed;}`}</style>
+      )}
       {loadError && (
         <div className="card" style={{ borderColor: "rgba(255,82,82,.4)" }}>
           <div style={{ color: "var(--error)", fontSize: 12.5 }}>
@@ -36,9 +55,13 @@ export default async function LandingPage() {
         </div>
       )}
       <div className="hero">
-        <div style={{ fontSize: 40, marginBottom: 10 }}>{company.logoEmoji || "💠"}</div>
-        <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 15, color: "var(--green)", fontWeight: 800, letterSpacing: 1 }}>
-          {company.name || "LENDA"}
+        {theme.logoUrl ? (
+          <img src={theme.logoUrl} alt={company.name} style={{ height: 48, marginBottom: 10 }} />
+        ) : (
+          <div style={{ fontSize: 40, marginBottom: 10 }}>{company.logoEmoji || "💠"}</div>
+        )}
+        <div style={{ fontFamily: "var(--font-main)", fontSize: 15, color: "var(--accent)", fontWeight: 800, letterSpacing: 1 }}>
+          {company.name || "Hambi Loans"}
         </div>
         <h1>{landing.heroTitle}</h1>
         <p>{landing.heroSubtitle}</p>

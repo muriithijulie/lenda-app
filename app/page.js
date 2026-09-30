@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { fmt, eligibility, daysUntil } from "../lib/eligibility";
 import { downloadCSV } from "../lib/csv";
+import { ACCENT_OPTIONS, FONT_OPTIONS, MODE_OPTIONS, CARD_STYLE_OPTIONS, DEFAULT_ADMIN_THEME, DEFAULT_PORTAL_THEME, applyTheme } from "../lib/theme";
+import { SMS_PROVIDERS } from "../lib/sms";
 
 const NAV = [
   { section: "Overview", items: [["dashboard", "📊", "Dashboard"]] },
@@ -74,7 +76,9 @@ export default function AdminApp() {
   const [communications, setCommunications] = useState([]);
   const [commsPrefillClientId, setCommsPrefillClientId] = useState(null);
   const [toast, setToast] = useState(null);
-  const [theme, setTheme] = useState("dark");
+  const [adminTheme, setAdminTheme] = useState(DEFAULT_ADMIN_THEME);
+  const [portalTheme, setPortalTheme] = useState(DEFAULT_PORTAL_THEME);
+  const [smsConfig, setSmsConfig] = useState({ provider: "", apiKey: "", username: "", senderId: "" });
 
   const showToast = (msg) => {
     setToast(msg);
@@ -82,7 +86,7 @@ export default function AdminApp() {
   };
 
   const refreshAll = useCallback(async () => {
-    const [r, c, l, s, co, p, a, cm] = await Promise.all([
+    const [r, c, l, s, co, p, a, cm, sms, th] = await Promise.all([
       fetch("/api/rules").then((r) => r.json()),
       fetch("/api/clients").then((r) => r.json()),
       fetch("/api/loans").then((r) => r.json()),
@@ -91,6 +95,8 @@ export default function AdminApp() {
       fetch("/api/payments").then((r) => r.json()),
       fetch("/api/activity").then((r) => r.json()),
       fetch("/api/communications").then((r) => r.json()),
+      fetch("/api/sms-settings").then((r) => r.json()),
+      fetch("/api/theme").then((r) => r.json()),
     ]);
     setRules(r);
     setClients(c);
@@ -100,22 +106,41 @@ export default function AdminApp() {
     setPayments(p);
     setActivity(a);
     setCommunications(cm);
+    setSmsConfig(sms);
+    if (th?.admin) setAdminTheme(th.admin);
+    if (th?.portal) setPortalTheme(th.portal);
   }, []);
 
   useEffect(() => {
-    const saved = (typeof window !== "undefined" && localStorage.getItem("lenda-theme")) || "dark";
-    setTheme(saved);
-    document.documentElement.setAttribute("data-theme", saved);
     refreshAll();
   }, [refreshAll]);
 
-  function toggleTheme() {
-    const next = theme === "light" ? "dark" : "light";
-    setTheme(next);
-    document.documentElement.setAttribute("data-theme", next);
-    try {
-      localStorage.setItem("lenda-theme", next);
-    } catch (e) {}
+  useEffect(() => {
+    applyTheme(document.documentElement, adminTheme);
+  }, [adminTheme]);
+
+  function quickToggleTheme() {
+    const next = { ...adminTheme, mode: adminTheme.mode === "light" ? "dark" : "light" };
+    setAdminTheme(next);
+    saveTheme({ admin: next, portal: portalTheme });
+  }
+
+  async function saveTheme(next) {
+    const res = await fetch("/api/theme", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.admin) setAdminTheme(data.admin);
+      if (data?.portal) setPortalTheme(data.portal);
+      showToast("Theme saved");
+    } else showToast("Could not save theme");
+  }
+
+  async function saveSmsConfig(next) {
+    const res = await fetch("/api/sms-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+    if (res.ok) {
+      setSmsConfig(await res.json());
+      showToast("SMS provider settings saved");
+    } else showToast("Could not save SMS settings");
   }
 
   async function addClient(e) {
@@ -272,8 +297,8 @@ export default function AdminApp() {
         <div className="topbar">
           <div className="page-title">{pageTitle}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button className="btn btn-ghost" onClick={toggleTheme} title="Toggle dark/light mode">
-              {theme === "light" ? "☀️" : "🌙"}
+            <button className="btn btn-ghost" onClick={quickToggleTheme} title="Toggle dark/light mode">
+              {adminTheme.mode === "light" ? "☀️" : "🌙"}
             </button>
             <div className="user-chip"><span className="user-dot"></span> Staff</div>
           </div>
@@ -323,10 +348,15 @@ export default function AdminApp() {
               company={company}
               staff={staff}
               payments={payments}
+              smsConfig={smsConfig}
+              adminTheme={adminTheme}
+              portalTheme={portalTheme}
               onSaveCompany={saveCompany}
               onAddStaff={addStaff}
               onSavePayments={savePayments}
               onSaveLanding={saveLanding}
+              onSaveSms={saveSmsConfig}
+              onSaveTheme={saveTheme}
             />
           )}
         </div>
@@ -929,8 +959,16 @@ function Communications({ clients, loans, communications, onSend, prefillClientI
   );
 }
 
-function Company({ companyTab, setCompanyTab, company, staff, payments, onSaveCompany, onAddStaff, onSavePayments, onSaveLanding }) {
-  const tabs = [["profile", "Profile & Contact"], ["staff", "Staff & Access"], ["payments", "Payment Methods"], ["landing", "Landing Page Content"]];
+function Company({ companyTab, setCompanyTab, company, staff, payments, smsConfig, adminTheme, portalTheme, onSaveCompany, onAddStaff, onSavePayments, onSaveLanding, onSaveSms, onSaveTheme }) {
+  const tabs = [
+    ["profile", "Profile & Contact"],
+    ["staff", "Staff & Access"],
+    ["payments", "Payment Methods"],
+    ["landing", "Landing Page Content"],
+    ["sms", "SMS Provider"],
+    ["adminTheme", "Admin Theme"],
+    ["portalTheme", "Portal Theme"],
+  ];
   return (
     <>
       <div className="btn-row" style={{ marginBottom: 18 }}>
@@ -1023,7 +1061,205 @@ function Company({ companyTab, setCompanyTab, company, staff, payments, onSaveCo
       )}
 
       {companyTab === "landing" && <LandingForm onSave={onSaveLanding} />}
+
+      {companyTab === "sms" && <SmsProviderForm smsConfig={smsConfig} onSave={onSaveSms} />}
+
+      {companyTab === "adminTheme" && (
+        <ThemeForm
+          title="🖥️ Admin Panel Theme"
+          theme={adminTheme}
+          showBackground={false}
+          showCardStyle={false}
+          showLogo={false}
+          onSave={(next) => onSaveTheme({ admin: next, portal: portalTheme })}
+        />
+      )}
+
+      {companyTab === "portalTheme" && (
+        <ThemeForm
+          title="🌐 Landing Page & Client Portal Theme"
+          theme={portalTheme}
+          showBackground={true}
+          showCardStyle={true}
+          showLogo={true}
+          onSave={(next) => onSaveTheme({ admin: adminTheme, portal: next })}
+        />
+      )}
     </>
+  );
+}
+
+function SmsProviderForm({ smsConfig, onSave }) {
+  const [provider, setProvider] = useState(smsConfig.provider || "");
+  const [apiKey, setApiKey] = useState(smsConfig.apiKey || "");
+  const [username, setUsername] = useState(smsConfig.username || "");
+  const [senderId, setSenderId] = useState(smsConfig.senderId || "");
+
+  useEffect(() => {
+    setProvider(smsConfig.provider || "");
+    setApiKey(smsConfig.apiKey || "");
+    setUsername(smsConfig.username || "");
+    setSenderId(smsConfig.senderId || "");
+  }, [smsConfig]);
+
+  const meta = SMS_PROVIDERS.find((p) => p.key === provider);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    onSave({ provider, apiKey, username, senderId });
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div className="card">
+        <div className="card-header"><div className="card-title">📱 SMS Provider</div></div>
+        <label>Select SMS Provider</label>
+        <div className="form-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 16 }}>
+          {SMS_PROVIDERS.map((p) => (
+            <div
+              key={p.key}
+              onClick={() => setProvider(p.key)}
+              style={{
+                cursor: "pointer",
+                textAlign: "center",
+                padding: "16px 10px",
+                borderRadius: 10,
+                border: `1.5px solid ${provider === p.key ? "var(--accent)" : "var(--border)"}`,
+                background: "var(--surface2)",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>{p.name}</div>
+              {p.recommended && <span className="badge b-approved">Recommended</span>}
+              {!p.wired && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 4 }}>Not yet wired to send</div>}
+            </div>
+          ))}
+        </div>
+
+        {provider === "africastalking" && (
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+            Register at africastalking.com → Settings → API Key.
+          </div>
+        )}
+
+        {provider && (
+          <>
+            <div className="form-grid">
+              <div><label>API Key</label><input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API key" /></div>
+              <div><label>Username</label><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Account username" /></div>
+            </div>
+            <label>Sender ID</label>
+            <input value={senderId} onChange={(e) => setSenderId(e.target.value)} placeholder="e.g. HAMBILOANS" />
+            {!meta?.wired && (
+              <div style={{ fontSize: 12, color: "var(--gold)", marginBottom: 10 }}>
+                {meta?.name} isn&apos;t connected to a live sending integration yet — reminders will still be logged on the Communications page, just not delivered by SMS until this is wired up.
+              </div>
+            )}
+            <button className="btn btn-green" type="submit">Save SMS Settings</button>
+          </>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function ThemeForm({ title, theme, showBackground, showCardStyle, showLogo, onSave }) {
+  const [mode, setMode] = useState(theme.mode);
+  const [accent, setAccent] = useState(theme.accent);
+  const [font, setFont] = useState(theme.font);
+  const [backgroundColor, setBackgroundColor] = useState(theme.backgroundColor || "");
+  const [backgroundImage, setBackgroundImage] = useState(theme.backgroundImage || "");
+  const [logoUrl, setLogoUrl] = useState(theme.logoUrl || "");
+  const [cardStyle, setCardStyle] = useState(theme.cardStyle || "default");
+
+  useEffect(() => {
+    setMode(theme.mode);
+    setAccent(theme.accent);
+    setFont(theme.font);
+    setBackgroundColor(theme.backgroundColor || "");
+    setBackgroundImage(theme.backgroundImage || "");
+    setLogoUrl(theme.logoUrl || "");
+    setCardStyle(theme.cardStyle || "default");
+  }, [theme]);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    onSave({ mode, accent, font, backgroundColor, backgroundImage, logoUrl, cardStyle });
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div className="card">
+        <div className="card-header"><div className="card-title">{title}</div></div>
+
+        <label>Mode</label>
+        <div className="form-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginBottom: 16 }}>
+          {MODE_OPTIONS.map((m) => (
+            <div
+              key={m.key}
+              onClick={() => setMode(m.key)}
+              style={{ cursor: "pointer", textAlign: "center", padding: "14px 8px", borderRadius: 10, border: `1.5px solid ${mode === m.key ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)" }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 13 }}>{m.label}</div>
+            </div>
+          ))}
+        </div>
+
+        <label>Accent Color</label>
+        <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+          {ACCENT_OPTIONS.map((a) => (
+            <div
+              key={a.value}
+              onClick={() => setAccent(a.value)}
+              title={a.name}
+              style={{ width: 34, height: 34, borderRadius: "50%", background: a.value, cursor: "pointer", border: accent === a.value ? "3px solid var(--text)" : "3px solid transparent" }}
+            />
+          ))}
+        </div>
+
+        <label>Font</label>
+        <div className="form-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 16 }}>
+          {FONT_OPTIONS.map((f) => (
+            <div
+              key={f.value}
+              onClick={() => setFont(f.value)}
+              style={{ cursor: "pointer", textAlign: "center", padding: "14px 8px", borderRadius: 10, border: `1.5px solid ${font === f.value ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)", fontFamily: f.value }}
+            >
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Aa</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "'DM Sans',sans-serif" }}>{f.name}</div>
+            </div>
+          ))}
+        </div>
+
+        {showBackground && (
+          <>
+            <label>Background Color (optional override)</label>
+            <input value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} placeholder="#080D14" />
+            <label>Background Image URL (optional)</label>
+            <input value={backgroundImage} onChange={(e) => setBackgroundImage(e.target.value)} placeholder="https://..." />
+          </>
+        )}
+
+        {showLogo && (
+          <>
+            <label>Company Logo URL (optional — falls back to the emoji logo if empty)</label>
+            <input value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://..." />
+          </>
+        )}
+
+        {showCardStyle && (
+          <>
+            <label>Card Style</label>
+            <div className="btn-row" style={{ marginBottom: 16 }}>
+              {CARD_STYLE_OPTIONS.map((c) => (
+                <button key={c.key} type="button" className={`btn ${cardStyle === c.key ? "btn-green" : "btn-ghost"}`} onClick={() => setCardStyle(c.key)}>{c.label}</button>
+              ))}
+            </div>
+          </>
+        )}
+
+        <button className="btn btn-green" type="submit">Save Theme</button>
+      </div>
+    </form>
   );
 }
 

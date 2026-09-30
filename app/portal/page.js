@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fmt, eligibility, daysUntil } from "../../lib/eligibility";
 import { getSupabaseBrowser } from "../../lib/supabaseBrowser";
+import { applyTheme, DEFAULT_PORTAL_THEME } from "../../lib/theme";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -14,12 +15,22 @@ export default function PortalPage() {
   const [rules, setRules] = useState(null);
   const [amount, setAmount] = useState("");
   const [applyError, setApplyError] = useState("");
-  const [theme, setTheme] = useState("dark");
+  const [orgTheme, setOrgTheme] = useState(DEFAULT_PORTAL_THEME);
+  const [modeOverride, setModeOverride] = useState(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem("lenda-theme") || "dark";
-    setTheme(saved);
-    document.documentElement.setAttribute("data-theme", saved);
+    let saved = null;
+    try {
+      saved = localStorage.getItem("lenda-portal-mode");
+    } catch (e) {}
+    setModeOverride(saved);
+
+    fetch("/api/theme")
+      .then((r) => r.json())
+      .then((t) => {
+        if (t?.portal) setOrgTheme(t.portal);
+      })
+      .catch(() => {});
 
     let supabase;
     try {
@@ -39,6 +50,21 @@ export default function PortalPage() {
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  const effectiveTheme = { ...orgTheme, mode: modeOverride || orgTheme.mode };
+
+  useEffect(() => {
+    applyTheme(document.documentElement, effectiveTheme, { cardStyleTarget: document.body });
+    if (effectiveTheme.backgroundImage) {
+      document.body.style.backgroundImage = `url('${effectiveTheme.backgroundImage}')`;
+      document.body.style.backgroundSize = "cover";
+      document.body.style.backgroundPosition = "center";
+      document.body.style.backgroundAttachment = "fixed";
+    } else {
+      document.body.style.backgroundImage = "";
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgTheme, modeOverride]);
 
   useEffect(() => {
     if (session) refresh();
@@ -78,11 +104,10 @@ export default function PortalPage() {
   }
 
   function toggleTheme() {
-    const next = theme === "light" ? "dark" : "light";
-    setTheme(next);
-    document.documentElement.setAttribute("data-theme", next);
+    const next = effectiveTheme.mode === "light" ? "dark" : "light";
+    setModeOverride(next);
     try {
-      localStorage.setItem("lenda-theme", next);
+      localStorage.setItem("lenda-portal-mode", next);
     } catch (e) {}
   }
 
@@ -134,7 +159,7 @@ export default function PortalPage() {
   return (
     <div className="landing-wrap">
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
-        <button className="btn btn-ghost" onClick={toggleTheme}>{theme === "light" ? "☀️" : "🌙"}</button>
+        <button className="btn btn-ghost" onClick={toggleTheme}>{effectiveTheme.mode === "light" ? "☀️" : "🌙"}</button>
         <button className="btn btn-ghost" onClick={signOut}>Log Out</button>
       </div>
 
