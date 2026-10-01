@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { fmt, eligibility, daysUntil } from "../lib/eligibility";
 import { downloadCSV } from "../lib/csv";
-import { ACCENT_OPTIONS, FONT_OPTIONS, MODE_OPTIONS, CARD_STYLE_OPTIONS, DEFAULT_ADMIN_THEME, DEFAULT_PORTAL_THEME, applyTheme } from "../lib/theme";
+import { ACCENT_OPTIONS, FONT_OPTIONS, MODE_OPTIONS, CARD_STYLE_OPTIONS, BACKGROUND_PRESETS, parseBackgroundImage, buildBackgroundImage, DEFAULT_ADMIN_THEME, DEFAULT_PORTAL_THEME, applyTheme } from "../lib/theme";
 import { SMS_PROVIDERS } from "../lib/sms";
 
 const NAV = [
@@ -1163,103 +1163,196 @@ function SmsProviderForm({ smsConfig, onSave }) {
 }
 
 function ThemeForm({ title, theme, showBackground, showCardStyle, showLogo, onSave }) {
+  const initialBg = parseBackgroundImage(theme.backgroundImage || "");
   const [mode, setMode] = useState(theme.mode);
   const [accent, setAccent] = useState(theme.accent);
   const [font, setFont] = useState(theme.font);
   const [backgroundColor, setBackgroundColor] = useState(theme.backgroundColor || "");
-  const [backgroundImage, setBackgroundImage] = useState(theme.backgroundImage || "");
+  const [bgPreset, setBgPreset] = useState(initialBg.presetKey);
+  const [bgCustomUrl, setBgCustomUrl] = useState(initialBg.customUrl);
   const [logoUrl, setLogoUrl] = useState(theme.logoUrl || "");
   const [cardStyle, setCardStyle] = useState(theme.cardStyle || "default");
 
   useEffect(() => {
+    const bg = parseBackgroundImage(theme.backgroundImage || "");
     setMode(theme.mode);
     setAccent(theme.accent);
     setFont(theme.font);
     setBackgroundColor(theme.backgroundColor || "");
-    setBackgroundImage(theme.backgroundImage || "");
+    setBgPreset(bg.presetKey);
+    setBgCustomUrl(bg.customUrl);
     setLogoUrl(theme.logoUrl || "");
     setCardStyle(theme.cardStyle || "default");
   }, [theme]);
+
+  const backgroundImage = buildBackgroundImage(bgPreset, bgCustomUrl);
 
   function handleSubmit(e) {
     e.preventDefault();
     onSave({ mode, accent, font, backgroundColor, backgroundImage, logoUrl, cardStyle });
   }
 
+  const previewPalette = { dark: "#080D14", light: "#f4f6f8", midnight: "#0b0620", forest: "#07140d" }[mode] || "#080D14";
+  const previewText = { dark: "#E8F0FE", light: "#111a24", midnight: "#EDE9FE", forest: "#E6F4EA" }[mode] || "#E8F0FE";
+  const previewBg = backgroundImage || (backgroundColor || previewPalette);
+  const previewCardBg =
+    cardStyle === "glass" ? "rgba(255,255,255,0.08)" : cardStyle === "minimal" ? "transparent" : mode === "light" ? "#ffffff" : "#0D1520";
+
   return (
-    <form onSubmit={handleSubmit}>
-      <div className="card">
-        <div className="card-header"><div className="card-title">{title}</div></div>
+    <div className={showBackground ? "grid-2" : ""}>
+      <form onSubmit={handleSubmit}>
+        <div className="card">
+          <div className="card-header"><div className="card-title">{title}</div></div>
 
-        <label>Mode</label>
-        <div className="form-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginBottom: 16 }}>
-          {MODE_OPTIONS.map((m) => (
+          <label>Mode</label>
+          <div className="form-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginBottom: 16 }}>
+            {MODE_OPTIONS.map((m) => (
+              <div
+                key={m.key}
+                onClick={() => setMode(m.key)}
+                style={{ cursor: "pointer", textAlign: "center", padding: "14px 8px", borderRadius: 10, border: `1.5px solid ${mode === m.key ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)" }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{m.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <label>Accent Color</label>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+            {ACCENT_OPTIONS.map((a) => (
+              <div
+                key={a.value}
+                onClick={() => setAccent(a.value)}
+                title={a.name}
+                style={{ width: 34, height: 34, borderRadius: "50%", background: a.value, cursor: "pointer", border: accent === a.value ? "3px solid var(--text)" : "3px solid transparent" }}
+              />
+            ))}
+          </div>
+
+          <label>Font</label>
+          <div className="form-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 16 }}>
+            {FONT_OPTIONS.map((f) => (
+              <div
+                key={f.value}
+                onClick={() => setFont(f.value)}
+                style={{ cursor: "pointer", textAlign: "center", padding: "14px 8px", borderRadius: 10, border: `1.5px solid ${font === f.value ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)", fontFamily: f.value }}
+              >
+                <div style={{ fontSize: 18, fontWeight: 700 }}>Aa</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "'DM Sans',sans-serif" }}>{f.name}</div>
+              </div>
+            ))}
+          </div>
+
+          {showBackground && (
+            <>
+              <label>Background Color (optional override)</label>
+              <input value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} placeholder="#080D14" />
+
+              <label>Background Image</label>
+              <div className="form-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginBottom: 10 }}>
+                {BACKGROUND_PRESETS.map((p) => (
+                  <div
+                    key={p.key}
+                    onClick={() => setBgPreset(p.key)}
+                    title={p.name}
+                    style={{
+                      cursor: "pointer",
+                      height: 48,
+                      borderRadius: 8,
+                      border: `2px solid ${bgPreset === p.key ? "var(--accent)" : "var(--border)"}`,
+                      background: p.css || "var(--surface2)",
+                      display: "flex",
+                      alignItems: "flex-end",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <span style={{ fontSize: 10, color: "#fff", background: "rgba(0,0,0,.45)", width: "100%", textAlign: "center", padding: "2px 0" }}>{p.name}</span>
+                  </div>
+                ))}
+                <div
+                  onClick={() => setBgPreset("custom")}
+                  style={{ cursor: "pointer", height: 48, borderRadius: 8, border: `2px solid ${bgPreset === "custom" ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--muted)" }}
+                >
+                  Custom URL
+                </div>
+              </div>
+              {bgPreset === "custom" && (
+                <input value={bgCustomUrl} onChange={(e) => setBgCustomUrl(e.target.value)} placeholder="Or paste image URL..." />
+              )}
+            </>
+          )}
+
+          {showLogo && (
+            <>
+              <label>Company Logo URL (optional — falls back to the emoji logo if empty)</label>
+              <input value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://..." />
+            </>
+          )}
+
+          {showCardStyle && (
+            <>
+              <label>Card Style</label>
+              <div className="btn-row" style={{ marginBottom: 16 }}>
+                {CARD_STYLE_OPTIONS.map((c) => (
+                  <button key={c.key} type="button" className={`btn ${cardStyle === c.key ? "btn-green" : "btn-ghost"}`} onClick={() => setCardStyle(c.key)}>{c.label}</button>
+                ))}
+              </div>
+            </>
+          )}
+
+          <button className="btn btn-green" type="submit">Save Theme</button>
+        </div>
+      </form>
+
+      {showBackground && (
+        <div className="card">
+          <div className="card-header"><div className="card-title">Live Preview</div></div>
+          <div
+            style={{
+              borderRadius: 12,
+              overflow: "hidden",
+              minHeight: 280,
+              background: previewBg,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 20,
+            }}
+          >
             <div
-              key={m.key}
-              onClick={() => setMode(m.key)}
-              style={{ cursor: "pointer", textAlign: "center", padding: "14px 8px", borderRadius: 10, border: `1.5px solid ${mode === m.key ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)" }}
+              style={{
+                background: previewCardBg,
+                backdropFilter: cardStyle === "glass" ? "blur(8px)" : "none",
+                border: cardStyle === "minimal" ? "none" : "1px solid rgba(255,255,255,.15)",
+                borderRadius: 14,
+                padding: "28px 24px",
+                textAlign: "center",
+                maxWidth: 260,
+                color: previewText,
+                fontFamily: font,
+              }}
             >
-              <div style={{ fontWeight: 700, fontSize: 13 }}>{m.label}</div>
+              {logoUrl ? (
+                <img src={logoUrl} alt="logo" style={{ height: 32, marginBottom: 10 }} />
+              ) : (
+                <div style={{ fontSize: 28, marginBottom: 10 }}>💠</div>
+              )}
+              <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6 }}>Loans that fit your business</div>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 14 }}>Apply in minutes. Get a decision fast.</div>
+              <div style={{ display: "inline-block", background: accent, color: "#04150c", fontWeight: 700, fontSize: 12.5, padding: "8px 18px", borderRadius: 8 }}>
+                Get Started →
+              </div>
             </div>
-          ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
+            Preview updates as you pick options below — nothing is live on the real page until you click Save Theme.
+          </div>
         </div>
-
-        <label>Accent Color</label>
-        <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-          {ACCENT_OPTIONS.map((a) => (
-            <div
-              key={a.value}
-              onClick={() => setAccent(a.value)}
-              title={a.name}
-              style={{ width: 34, height: 34, borderRadius: "50%", background: a.value, cursor: "pointer", border: accent === a.value ? "3px solid var(--text)" : "3px solid transparent" }}
-            />
-          ))}
-        </div>
-
-        <label>Font</label>
-        <div className="form-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 16 }}>
-          {FONT_OPTIONS.map((f) => (
-            <div
-              key={f.value}
-              onClick={() => setFont(f.value)}
-              style={{ cursor: "pointer", textAlign: "center", padding: "14px 8px", borderRadius: 10, border: `1.5px solid ${font === f.value ? "var(--accent)" : "var(--border)"}`, background: "var(--surface2)", fontFamily: f.value }}
-            >
-              <div style={{ fontSize: 18, fontWeight: 700 }}>Aa</div>
-              <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "'DM Sans',sans-serif" }}>{f.name}</div>
-            </div>
-          ))}
-        </div>
-
-        {showBackground && (
-          <>
-            <label>Background Color (optional override)</label>
-            <input value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} placeholder="#080D14" />
-            <label>Background Image URL (optional)</label>
-            <input value={backgroundImage} onChange={(e) => setBackgroundImage(e.target.value)} placeholder="https://..." />
-          </>
-        )}
-
-        {showLogo && (
-          <>
-            <label>Company Logo URL (optional — falls back to the emoji logo if empty)</label>
-            <input value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://..." />
-          </>
-        )}
-
-        {showCardStyle && (
-          <>
-            <label>Card Style</label>
-            <div className="btn-row" style={{ marginBottom: 16 }}>
-              {CARD_STYLE_OPTIONS.map((c) => (
-                <button key={c.key} type="button" className={`btn ${cardStyle === c.key ? "btn-green" : "btn-ghost"}`} onClick={() => setCardStyle(c.key)}>{c.label}</button>
-              ))}
-            </div>
-          </>
-        )}
-
-        <button className="btn btn-green" type="submit">Save Theme</button>
-      </div>
-    </form>
+      )}
+    </div>
   );
 }
 
