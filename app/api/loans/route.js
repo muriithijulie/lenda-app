@@ -3,20 +3,20 @@ export const dynamic = "force-dynamic";
 import { getValue, setValue, uid } from "../../../lib/store";
 import { logActivity } from "../../../lib/activity";
 import { eligibility, fmt } from "../../../lib/eligibility";
-import { getAuthedClient } from "../../../lib/auth";
+import { getAuthedClient, getAuthedStaff } from "../../../lib/auth";
 
 export async function GET(req) {
   try {
     const loans = (await getValue("loans")) || [];
     const sorted = [...loans].sort((a, b) => (b.appliedDate || "").localeCompare(a.appliedDate || ""));
 
-    // A signed-in client (portal) only ever sees their own loans. A request
-    // with no auth token (the admin dashboard) still gets the full list.
+    const { staff } = await getAuthedStaff(req);
+    if (staff) return NextResponse.json(sorted);
+
     const { client } = await getAuthedClient(req);
-    if (client) {
-      return NextResponse.json(sorted.filter((l) => l.clientId === client.id));
-    }
-    return NextResponse.json(sorted);
+    if (client) return NextResponse.json(sorted.filter((l) => l.clientId === client.id));
+
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   } catch (err) {
     return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
   }

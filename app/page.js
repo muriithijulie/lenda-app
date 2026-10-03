@@ -4,7 +4,21 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveCo
 import { fmt, eligibility, daysUntil } from "../lib/eligibility";
 import { downloadCSV } from "../lib/csv";
 import { ACCENT_OPTIONS, FONT_OPTIONS, MODE_OPTIONS, CARD_STYLE_OPTIONS, BACKGROUND_PRESETS, parseBackgroundImage, buildBackgroundImage, DEFAULT_ADMIN_THEME, DEFAULT_PORTAL_THEME, applyTheme } from "../lib/theme";
-import { SMS_PROVIDERS } from "../lib/sms";
+import { SMS_PROVIDERS, FIELD_LABELS } from "../lib/sms";
+import { ALL_TABS } from "../lib/tabs";
+import { getSupabaseBrowser } from "../lib/supabaseBrowser";
+
+// Attaches the signed-in staff member's Supabase session token to every
+// request, so the API routes behind it can verify who's actually asking.
+async function api(url, opts = {}) {
+  let token = "";
+  try {
+    const supabase = getSupabaseBrowser();
+    const { data } = await supabase.auth.getSession();
+    token = data.session?.access_token || "";
+  } catch (e) {}
+  return fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: token ? `Bearer ${token}` : "" } });
+}
 
 const NAV = [
   { section: "Overview", items: [["dashboard", "📊", "Dashboard"]] },
@@ -25,16 +39,6 @@ const NAV = [
   },
   { section: "Engage", items: [["comms", "📨", "Communications"]] },
   { section: "Setup", items: [["company", "🏢", "Company Setup"]] },
-];
-const ALL_TABS = [
-  ["dashboard", "Dashboard"],
-  ["clients", "Clients"],
-  ["rules", "Loan Rules"],
-  ["loans", "Loans"],
-  ["reports", "Reports"],
-  ["risk", "Risk"],
-  ["comms", "Communications"],
-  ["company", "Company Setup"],
 ];
 const EMPTY_RULES = { minIncome: 10000, maxMultiplier: 3, interestRatePct: 12, termMonths: 6, allowed: [] };
 const STATUS_COLORS = { pending: "#FFD740", reviewing: "#FF4081", approved: "#40C4FF", active: "#00E676", closed: "#5C7A99", rejected: "#FF5252" };
@@ -62,8 +66,9 @@ function currentLoanFor(clientId, loans) {
   return open || mine[0];
 }
 
-export default function AdminApp() {
-  const [page, setPage] = useState("dashboard");
+function AdminApp({ me, onSignOut }) {
+  const myTabs = me.tabs && me.tabs.length ? me.tabs : ALL_TABS.map(([k]) => k);
+  const [page, setPage] = useState(myTabs.includes("dashboard") ? "dashboard" : myTabs[0] || "dashboard");
   const [companyTab, setCompanyTab] = useState("profile");
   const [reportsTab, setReportsTab] = useState("company");
   const [rules, setRules] = useState(EMPTY_RULES);
@@ -87,16 +92,16 @@ export default function AdminApp() {
 
   const refreshAll = useCallback(async () => {
     const [r, c, l, s, co, p, a, cm, sms, th] = await Promise.all([
-      fetch("/api/rules").then((r) => r.json()),
-      fetch("/api/clients").then((r) => r.json()),
-      fetch("/api/loans").then((r) => r.json()),
-      fetch("/api/staff").then((r) => r.json()),
-      fetch("/api/company").then((r) => r.json()),
-      fetch("/api/payments").then((r) => r.json()),
-      fetch("/api/activity").then((r) => r.json()),
-      fetch("/api/communications").then((r) => r.json()),
-      fetch("/api/sms-settings").then((r) => r.json()),
-      fetch("/api/theme").then((r) => r.json()),
+      api("/api/rules").then((r) => r.json()),
+      api("/api/clients").then((r) => r.json()),
+      api("/api/loans").then((r) => r.json()),
+      api("/api/staff").then((r) => r.json()),
+      api("/api/company").then((r) => r.json()),
+      api("/api/payments").then((r) => r.json()),
+      api("/api/activity").then((r) => r.json()),
+      api("/api/communications").then((r) => r.json()),
+      api("/api/sms-settings").then((r) => r.json()),
+      api("/api/theme").then((r) => r.json()),
     ]);
     setRules(r);
     setClients(c);
@@ -126,7 +131,7 @@ export default function AdminApp() {
   }
 
   async function saveTheme(next) {
-    const res = await fetch("/api/theme", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+    const res = await api("/api/theme", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
     if (res.ok) {
       const data = await res.json();
       if (data?.admin) setAdminTheme(data.admin);
@@ -136,7 +141,7 @@ export default function AdminApp() {
   }
 
   async function saveSmsConfig(next) {
-    const res = await fetch("/api/sms-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+    const res = await api("/api/sms-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
     if (res.ok) {
       setSmsConfig(await res.json());
       showToast("SMS provider settings saved");
@@ -154,7 +159,7 @@ export default function AdminApp() {
       employment: f.employment.value,
     };
     if (!body.name || !body.phone) return showToast("Name and phone required");
-    const res = await fetch("/api/clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await api("/api/clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (res.ok) {
       f.reset();
       showToast("Client registered");
@@ -172,13 +177,13 @@ export default function AdminApp() {
       termMonths: Number(f.termMonths.value) || 1,
       allowed: f.allowed.value.split(",").map((s) => s.trim()).filter(Boolean),
     };
-    await fetch("/api/rules", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await api("/api/rules", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     showToast("Rules saved");
     refreshAll();
   }
 
   async function loanAction(id, action, amount) {
-    const res = await fetch(`/api/loans/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, amount }) });
+    const res = await api(`/api/loans/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, amount }) });
     if (res.ok) {
       showToast("Updated");
       refreshAll();
@@ -186,7 +191,7 @@ export default function AdminApp() {
   }
 
   async function sendComms(clientIds, message, template) {
-    const res = await fetch("/api/communications", {
+    const res = await api("/api/communications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientIds, message, template }),
@@ -214,7 +219,7 @@ export default function AdminApp() {
       careEmail: f.careEmail.value.trim(),
       careWhatsapp: f.careWhatsapp.value.trim(),
     };
-    await fetch("/api/company", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await api("/api/company", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     showToast("Company profile saved");
     refreshAll();
   }
@@ -223,12 +228,12 @@ export default function AdminApp() {
     e.preventDefault();
     const f = e.target;
     const tabs = [...f.querySelectorAll(".s-tab:checked")].map((c) => c.value);
-    const body = { name: f.name.value.trim(), email: f.email.value.trim(), role: f.role.value, tabs };
-    if (!body.name || !body.email) return showToast("Name and email required");
-    const res = await fetch("/api/staff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const body = { name: f.name.value.trim(), email: f.email.value.trim(), password: f.password.value, role: f.role.value, tabs };
+    if (!body.name || !body.email || !body.password) return showToast("Name, email and password required");
+    const res = await api("/api/staff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (res.ok) {
       f.reset();
-      showToast("Staff member added");
+      showToast("Staff member added — share their email and password with them so they can log in");
       refreshAll();
     } else showToast((await res.json()).error || "Failed");
   }
@@ -245,7 +250,7 @@ export default function AdminApp() {
       bankAccountNumber: f.bankAccountNumber.value.trim(),
       bankBranch: f.bankBranch.value.trim(),
     };
-    await fetch("/api/payments", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await api("/api/payments", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     showToast("Payment methods saved");
     refreshAll();
   }
@@ -262,7 +267,7 @@ export default function AdminApp() {
         desc: f[`f${i}d`].value.trim(),
       })),
     };
-    await fetch("/api/landing", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await api("/api/landing", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     showToast("Landing page saved");
   }
 
@@ -275,21 +280,25 @@ export default function AdminApp() {
           <div className="company">{company.logoEmoji || "💠"} {company.name || "LENDA"}</div>
           <div className="powered">{company.tagline || "Microfinance Loan Admin"}</div>
         </div>
-        {NAV.map((sec) => (
-          <div key={sec.section}>
-            <div className="nav-section">{sec.section}</div>
-            {sec.items.map(([key, icon, label]) => (
-              <button key={key} className={`nav-item ${page === key ? "active" : ""}`} onClick={() => setPage(key)}>
-                <span className="icon">{icon}</span> {label}
-              </button>
-            ))}
-          </div>
-        ))}
+        {NAV.map((sec) => {
+          const items = sec.items.filter(([key]) => myTabs.includes(key));
+          if (items.length === 0) return null;
+          return (
+            <div key={sec.section}>
+              <div className="nav-section">{sec.section}</div>
+              {items.map(([key, icon, label]) => (
+                <button key={key} className={`nav-item ${page === key ? "active" : ""}`} onClick={() => setPage(key)}>
+                  <span className="icon">{icon}</span> {label}
+                </button>
+              ))}
+            </div>
+          );
+        })}
         <div className="nav-section">Public pages</div>
         <a className="nav-item" href="/landing" target="_blank" rel="noreferrer"><span className="icon">🌐</span> Landing Page</a>
         <a className="nav-item" href="/portal" target="_blank" rel="noreferrer"><span className="icon">🙋</span> Client Portal</a>
         <div className="sidebar-footer">
-          <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 12px" }}>Staff access shown, not yet enforced</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 12px" }}>Signed in as {me.role}</div>
         </div>
       </aside>
 
@@ -300,11 +309,13 @@ export default function AdminApp() {
             <button className="btn btn-ghost" onClick={quickToggleTheme} title="Toggle dark/light mode">
               {adminTheme.mode === "light" ? "☀️" : "🌙"}
             </button>
-            <div className="user-chip"><span className="user-dot"></span> Staff</div>
+            <div className="user-chip"><span className="user-dot"></span> {me.name}</div>
+            <button className="btn btn-ghost" onClick={onSignOut}>Sign Out</button>
           </div>
         </div>
 
         <div className="content">
+          {!myTabs.includes(page) ? <div className="card empty">You don&apos;t have access to this section.</div> : <>
           {page === "dashboard" && (
             <Dashboard clients={clients} loans={loans} activity={activity} rules={rules} setPage={setPage} />
           )}
@@ -359,6 +370,7 @@ export default function AdminApp() {
               onSaveTheme={saveTheme}
             />
           )}
+          </>}
         </div>
       </div>
 
@@ -1007,8 +1019,10 @@ function Company({ companyTab, setCompanyTab, company, staff, payments, smsConfi
             <form onSubmit={onAddStaff}>
               <div className="form-grid">
                 <div><label>Full name</label><input name="name" /></div>
-                <div><label>Email</label><input name="email" /></div>
+                <div><label>Email</label><input name="email" type="email" /></div>
               </div>
+              <label>Temporary Password (share this with them to log in)</label>
+              <input name="password" type="text" minLength={6} placeholder="At least 6 characters" />
               <label>Role</label>
               <select name="role">{["Admin", "Manager", "Loan Officer", "Support"].map((o) => <option key={o}>{o}</option>)}</select>
               <label>Tabs this staff member can access</label>
@@ -1130,24 +1144,28 @@ function SmsProviderForm({ smsConfig, onSave }) {
             >
               <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>{p.name}</div>
               {p.recommended && <span className="badge b-approved">Recommended</span>}
-              {!p.wired && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 4 }}>Not yet wired to send</div>}
+              {p.wired ? (
+                <div style={{ fontSize: 10.5, color: "var(--accent)", marginTop: 4 }}>✓ Live sending</div>
+              ) : (
+                <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 4 }}>Not yet wired to send</div>
+              )}
             </div>
           ))}
         </div>
 
-        {provider === "africastalking" && (
+        {provider && FIELD_LABELS[provider]?.note && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
-            Register at africastalking.com → Settings → API Key.
+            {FIELD_LABELS[provider].note}
           </div>
         )}
 
         {provider && (
           <>
             <div className="form-grid">
-              <div><label>API Key</label><input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API key" /></div>
-              <div><label>Username</label><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Account username" /></div>
+              <div><label>{FIELD_LABELS[provider]?.apiKey || "API Key"}</label><input value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></div>
+              <div><label>{FIELD_LABELS[provider]?.username || "Username"}</label><input value={username} onChange={(e) => setUsername(e.target.value)} /></div>
             </div>
-            <label>Sender ID</label>
+            <label>{FIELD_LABELS[provider]?.senderId || "Sender ID"}</label>
             <input value={senderId} onChange={(e) => setSenderId(e.target.value)} placeholder="e.g. HAMBILOANS" />
             {!meta?.wired && (
               <div style={{ fontSize: 12, color: "var(--gold)", marginBottom: 10 }}>
@@ -1359,7 +1377,7 @@ function ThemeForm({ title, theme, showBackground, showCardStyle, showLogo, onSa
 function LandingForm({ onSave }) {
   const [landing, setLanding] = useState(null);
   useEffect(() => {
-    fetch("/api/landing").then((r) => r.json()).then(setLanding);
+    api("/api/landing").then((r) => r.json()).then(setLanding);
   }, []);
   if (!landing) return <div className="empty">Loading…</div>;
   const f = landing.features || [{}, {}, {}];
@@ -1381,5 +1399,169 @@ function LandingForm({ onSave }) {
         <a className="card-action" style={{ marginLeft: 12 }} href="/landing" target="_blank" rel="noreferrer">Preview →</a>
       </form>
     </div>
+  );
+}
+
+// Gates the whole admin dashboard behind real Supabase Auth. Three states:
+// no staff account exists anywhere yet (first-run setup), a staff account
+// exists but this browser isn't signed in (login), or signed in (the app).
+export default function AuthGate() {
+  const [status, setStatus] = useState("loading"); // loading | setup | login | ready
+  const [me, setMe] = useState(null);
+  const [error, setError] = useState("");
+
+  const checkSession = useCallback(async () => {
+    setError("");
+    let supabase;
+    try {
+      supabase = getSupabaseBrowser();
+    } catch (err) {
+      setError(err.message);
+      setStatus("login");
+      return;
+    }
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) {
+      const bootRes = await fetch("/api/staff/bootstrap").then((r) => r.json()).catch(() => ({ hasStaff: true }));
+      setStatus(bootRes.hasStaff ? "login" : "setup");
+      return;
+    }
+    const meRes = await api("/api/staff/me");
+    if (meRes.ok) {
+      setMe(await meRes.json());
+      setStatus("ready");
+    } else {
+      setError("This account isn't registered as staff.");
+      await supabase.auth.signOut();
+      setStatus("login");
+    }
+  }, []);
+
+  useEffect(() => {
+    checkSession();
+  }, [checkSession]);
+
+  async function handleSignOut() {
+    try {
+      const supabase = getSupabaseBrowser();
+      await supabase.auth.signOut();
+    } catch (e) {}
+    setMe(null);
+    setStatus("login");
+  }
+
+  if (status === "loading") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#080D14" }}>
+        <div style={{ color: "#5C7A99" }}>Loading…</div>
+      </div>
+    );
+  }
+
+  if (status === "setup") return <SetupForm onDone={checkSession} initialError={error} />;
+  if (status === "login") return <StaffLoginForm onSignedIn={checkSession} initialError={error} />;
+  return <AdminApp me={me} onSignOut={handleSignOut} />;
+}
+
+function AuthScreen({ title, subtitle, children }) {
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#080D14", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 420, background: "#0D1520", border: "1.5px solid #1A2E45", borderRadius: 16, padding: 28 }}>
+        <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 20, fontWeight: 800, color: "#00E676", marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 13, color: "#5C7A99", marginBottom: 20 }}>{subtitle}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SetupForm({ onDone, initialError }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(initialError || "");
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    const f = e.target;
+    try {
+      const name = f.name.value.trim();
+      const email = f.email.value.trim();
+      const password = f.password.value;
+
+      const res = await fetch("/api/staff/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not create the admin account");
+
+      const supabase = getSupabaseBrowser();
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) throw signInError;
+
+      onDone();
+    } catch (err) {
+      setError(err.message || "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AuthScreen title="💠 Set Up Hambi Loans" subtitle="No admin account exists yet — create the first one to get started. It will have full access to every section.">
+      <form onSubmit={handleSubmit}>
+        <label>Your full name</label>
+        <input name="name" required />
+        <label>Email</label>
+        <input name="email" type="email" required />
+        <label>Password</label>
+        <input name="password" type="password" minLength={6} required />
+        {error && <div style={{ color: "var(--error)", fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
+        <button className="btn btn-green" type="submit" disabled={loading} style={{ width: "100%" }}>
+          {loading ? "Setting up…" : "Create Admin Account"}
+        </button>
+      </form>
+    </AuthScreen>
+  );
+}
+
+function StaffLoginForm({ onSignedIn, initialError }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(initialError || "");
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    const f = e.target;
+    try {
+      const email = f.email.value.trim();
+      const password = f.password.value;
+      const supabase = getSupabaseBrowser();
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) throw signInError;
+      onSignedIn();
+    } catch (err) {
+      setError(err.message || "Could not sign in");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AuthScreen title="💠 Staff Login" subtitle="Sign in to manage loans, clients and settings.">
+      <form onSubmit={handleSubmit}>
+        <label>Email</label>
+        <input name="email" type="email" required />
+        <label>Password</label>
+        <input name="password" type="password" required />
+        {error && <div style={{ color: "var(--error)", fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
+        <button className="btn btn-green" type="submit" disabled={loading} style={{ width: "100%" }}>
+          {loading ? "Signing in…" : "Sign In"}
+        </button>
+      </form>
+    </AuthScreen>
   );
 }

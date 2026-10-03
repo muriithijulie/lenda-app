@@ -3,9 +3,12 @@ export const dynamic = "force-dynamic";
 import { getValue, setValue, uid } from "../../../lib/store";
 import { logActivity } from "../../../lib/activity";
 import { sendSms } from "../../../lib/sms";
+import { requireStaff } from "../../../lib/auth";
 
-export async function GET() {
+export async function GET(req) {
   try {
+    const me = await requireStaff(req);
+    if (!me) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
     const log = (await getValue("communications")) || [];
     return NextResponse.json([...log].sort((a, b) => (b.sentAt || "").localeCompare(a.sentAt || "")));
   } catch (err) {
@@ -13,13 +16,11 @@ export async function GET() {
   }
 }
 
-// Records that a reminder was sent, and actually dispatches it by SMS if a
-// wired-up provider is configured in Settings → SMS Provider (currently only
-// Africa's Talking sends for real — see lib/sms.js). If sending fails or no
-// provider is configured, the reminder is still logged with a clear status
-// so staff know it wasn't actually delivered.
 export async function POST(req) {
   try {
+    const me = await requireStaff(req);
+    if (!me) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
     const body = await req.json();
     const { clientIds, message, template } = body;
     if (!Array.isArray(clientIds) || clientIds.length === 0) {

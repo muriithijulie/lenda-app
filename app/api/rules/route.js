@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 import { getValue, setValue } from "../../../lib/store";
+import { getAuthedClient, getAuthedStaff, requireStaff } from "../../../lib/auth";
 
-export async function GET() {
+export async function GET(req) {
   try {
-    return NextResponse.json(await getValue("rules"));
+    const { staff } = await getAuthedStaff(req);
+    if (staff) return NextResponse.json(await getValue("rules"));
+    const { client } = await getAuthedClient(req);
+    if (client) return NextResponse.json(await getValue("rules"));
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   } catch (err) {
     return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
   }
@@ -12,6 +17,8 @@ export async function GET() {
 
 export async function PUT(req) {
   try {
+    const me = await requireStaff(req);
+    if (!me) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
     const body = await req.json();
     return NextResponse.json(await setValue("rules", body));
   } catch (err) {

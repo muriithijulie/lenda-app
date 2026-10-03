@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 import { getValue, setValue, uid } from "../../../lib/store";
 import { logActivity } from "../../../lib/activity";
+import { requireStaff } from "../../../lib/auth";
+import { getSupabase } from "../../../lib/supabaseServer";
 
-export async function GET() {
+export async function GET(req) {
   try {
+    const me = await requireStaff(req);
+    if (!me) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
     return NextResponse.json(await getValue("clients"));
   } catch (err) {
     return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
@@ -18,11 +22,27 @@ export async function POST(req) {
       return NextResponse.json({ error: "Name and phone are required" }, { status: 400 });
     }
 
+    // Two legitimate ways to hit this route: (1) a client signing themselves
+    // up from the landing page, which arrives with an authId — verified
+    // below to actually match the signed-in Supabase user making the
+    // request, not just trusted at face value; or (2) a staff member
+    // registering a walk-in client with no authId. Anything else is refused.
+    if (body.authId) {
+      const authHeader = req.headers.get("authorization") || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+      if (!token) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+      const supabase = getSupabase();
+      const { data, error } = await supabase.auth.getUser(token);
+      if (error || !data?.user || data.user.id !== body.authId) {
+        return NextResponse.json({ error: "Authentication mismatch" }, { status: 401 });
+      }
+    } else {
+      const me = await requireStaff(req);
+      if (!me) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    }
+
     const clients = (await getValue("clients")) || [];
 
-    // If this is a self-signup (authId present) and staff already registered
-    // this person at the counter with the same email or phone, link the new
-    // login to that existing record instead of creating a duplicate.
     if (body.authId) {
       const existing = clients.find(
         (c) => !c.authId && ((body.email && c.email === body.email) || c.phone === body.phone)

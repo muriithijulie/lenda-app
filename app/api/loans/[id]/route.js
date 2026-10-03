@@ -3,9 +3,13 @@ export const dynamic = "force-dynamic";
 import { getValue, updateItem } from "../../../../lib/store";
 import { logActivity } from "../../../../lib/activity";
 import { fmt } from "../../../../lib/eligibility";
+import { requireStaff } from "../../../../lib/auth";
 
 export async function PATCH(req, { params }) {
   try {
+    const me = await requireStaff(req);
+    if (!me) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
     const { id } = await params;
     const body = await req.json();
     const { action, amount } = body;
