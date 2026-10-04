@@ -80,6 +80,7 @@ function AdminApp({ me, onSignOut }) {
   const [activity, setActivity] = useState([]);
   const [communications, setCommunications] = useState([]);
   const [commsPrefillClientId, setCommsPrefillClientId] = useState(null);
+  const [clientModal, setClientModal] = useState(null); // { clientId, mode: "view"|"edit" } | null
   const [toast, setToast] = useState(null);
   const [adminTheme, setAdminTheme] = useState(DEFAULT_ADMIN_THEME);
   const [portalTheme, setPortalTheme] = useState(DEFAULT_PORTAL_THEME);
@@ -165,6 +166,58 @@ function AdminApp({ me, onSignOut }) {
       showToast("Client registered");
       refreshAll();
     } else showToast((await res.json()).error || "Failed");
+  }
+
+  async function updateClient(id, patch) {
+    const res = await api(`/api/clients/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    if (res.ok) {
+      showToast("Client updated");
+      refreshAll();
+      return true;
+    }
+    showToast((await res.json()).error || "Could not update client");
+    return false;
+  }
+
+  async function deleteClient(id) {
+    const res = await api(`/api/clients/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      showToast("Client deleted");
+      refreshAll();
+      return true;
+    }
+    showToast((await res.json()).error || "Could not delete client");
+    return false;
+  }
+
+  async function uploadClientDocument(clientId, file, label) {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("label", label || file.name);
+    const res = await api(`/api/clients/${clientId}/documents`, { method: "POST", body: formData });
+    if (res.ok) {
+      showToast("Document uploaded");
+      refreshAll();
+      return true;
+    }
+    showToast((await res.json()).error || "Upload failed");
+    return false;
+  }
+
+  async function deleteClientDocument(clientId, docId) {
+    const res = await api(`/api/clients/${clientId}/documents/${docId}`, { method: "DELETE" });
+    if (res.ok) {
+      showToast("Document removed");
+      refreshAll();
+    } else showToast((await res.json()).error || "Could not remove document");
+  }
+
+  async function viewClientDocument(clientId, docId) {
+    const res = await api(`/api/clients/${clientId}/documents/${docId}`);
+    if (res.ok) {
+      const { url } = await res.json();
+      window.open(url, "_blank", "noopener,noreferrer");
+    } else showToast((await res.json()).error || "Could not open document");
   }
 
   async function saveRules(e) {
@@ -319,7 +372,21 @@ function AdminApp({ me, onSignOut }) {
           {page === "dashboard" && (
             <Dashboard clients={clients} loans={loans} activity={activity} rules={rules} setPage={setPage} />
           )}
-          {page === "clients" && <Clients clients={clients} loans={loans} rules={rules} onAdd={addClient} />}
+          {page === "clients" && (
+            <Clients
+              clients={clients}
+              loans={loans}
+              rules={rules}
+              onAdd={addClient}
+              clientModal={clientModal}
+              setClientModal={setClientModal}
+              onUpdate={updateClient}
+              onDelete={deleteClient}
+              onUpload={uploadClientDocument}
+              onDeleteDoc={deleteClientDocument}
+              onViewDoc={viewClientDocument}
+            />
+          )}
           {page === "rules" && <Rules rules={rules} onSave={saveRules} />}
           {page === "loans" && <Loans loans={loans} clients={clients} onAction={loanAction} />}
           {page === "reports" && (
@@ -463,12 +530,6 @@ function Dashboard({ clients, loans, activity, rules, setPage }) {
           </div>
         ))}
       </div>
-      <div className="card" style={{ borderColor: "rgba(255,215,64,.3)" }}>
-        <div className="card-title" style={{ color: "var(--gold)", marginBottom: 6 }}>⚠️ Deployment notice</div>
-        <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>
-          Client portal login is real (Supabase Auth), but staff sign-in isn&apos;t built yet — this admin dashboard has no login of its own. Anyone with the URL can reach it. Add authentication here before this goes fully live with real client data.
-        </div>
-      </div>
     </>
   );
 }
@@ -478,7 +539,20 @@ function badgeLabel(status) {
   return map[status] || status;
 }
 
-function Clients({ clients, loans, rules, onAdd }) {
+function Clients({ clients, loans, rules, onAdd, clientModal, setClientModal, onUpdate, onDelete, onUpload, onDeleteDoc, onViewDoc }) {
+  const [search, setSearch] = useState("");
+  const q = search.trim().toLowerCase();
+  const filtered = !q
+    ? clients
+    : clients.filter(
+        (c) =>
+          (c.name || "").toLowerCase().includes(q) ||
+          (c.phone || "").toLowerCase().includes(q) ||
+          (c.nationalId || "").toLowerCase().includes(q)
+      );
+
+  const modalClient = clientModal ? clients.find((c) => c.id === clientModal.clientId) : null;
+
   return (
     <>
       <div className="card">
@@ -499,9 +573,17 @@ function Clients({ clients, loans, rules, onAdd }) {
       </div>
       <div className="card">
         <div className="card-header"><div className="card-title">👥 All Clients</div></div>
+        <input
+          className="search-input"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name, phone, or national ID…"
+        />
         <div className="tablewrap"><table><tbody>
-          <tr><th>Name</th><th>Phone</th><th>Income</th><th>Eligible Limit</th><th>Loan Status</th><th>Amount Awarded</th><th>Paid So Far</th><th>Amount Due</th></tr>
-          {clients.length === 0 ? <tr><td colSpan={8} className="empty">No clients registered yet</td></tr> : clients.map((c) => {
+          <tr><th>Name</th><th>Phone</th><th>Income</th><th>Eligible Limit</th><th>Loan Status</th><th>Amount Awarded</th><th>Paid So Far</th><th>Amount Due</th><th>Actions</th></tr>
+          {filtered.length === 0 ? (
+            <tr><td colSpan={9} className="empty">{clients.length === 0 ? "No clients registered yet" : "No clients match your search"}</td></tr>
+          ) : filtered.map((c) => {
             const e = eligibility(c, rules);
             const loan = currentLoanFor(c.id, loans);
             const awarded = loan && loan.totalDue ? loan.amount : null;
@@ -515,12 +597,147 @@ function Clients({ clients, loans, rules, onAdd }) {
                 <td className="mono">{awarded !== null ? fmt(awarded) : "—"}</td>
                 <td className="mono">{loan && loan.totalDue ? fmt(loan.paidSoFar || 0) : "—"}</td>
                 <td className="mono">{due !== null ? fmt(due) : "—"}</td>
+                <td>
+                  <div className="btn-row">
+                    <button className="btn btn-ghost" onClick={() => setClientModal({ clientId: c.id, mode: "view" })}>View</button>
+                    <button className="btn btn-ghost" onClick={() => setClientModal({ clientId: c.id, mode: "edit" })}>Edit</button>
+                    <button
+                      className="btn btn-error"
+                      onClick={() => {
+                        if (confirm(`Delete ${c.name}? This can't be undone.`)) onDelete(c.id);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </td>
               </tr>
             );
           })}
         </tbody></table></div>
       </div>
+
+      {modalClient && (
+        <ClientModal
+          client={modalClient}
+          mode={clientModal.mode}
+          onClose={() => setClientModal(null)}
+          onSave={async (patch) => {
+            const ok = await onUpdate(modalClient.id, patch);
+            if (ok) setClientModal({ clientId: modalClient.id, mode: "view" });
+          }}
+          onDelete={async () => {
+            if (confirm(`Delete ${modalClient.name}? This can't be undone.`)) {
+              const ok = await onDelete(modalClient.id);
+              if (ok) setClientModal(null);
+            }
+          }}
+          onEdit={() => setClientModal({ clientId: modalClient.id, mode: "edit" })}
+          onCancelEdit={() => setClientModal({ clientId: modalClient.id, mode: "view" })}
+          onUpload={(file, label) => onUpload(modalClient.id, file, label)}
+          onDeleteDoc={(docId) => onDeleteDoc(modalClient.id, docId)}
+          onViewDoc={(docId) => onViewDoc(modalClient.id, docId)}
+        />
+      )}
     </>
+  );
+}
+
+function ClientModal({ client, mode, onClose, onSave, onDelete, onEdit, onCancelEdit, onUpload, onDeleteDoc, onViewDoc }) {
+  const [uploadLabel, setUploadLabel] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  async function handleFileChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    await onUpload(file, uploadLabel);
+    setUploadLabel("");
+    setUploading(false);
+    e.target.value = "";
+  }
+
+  function handleSave(e) {
+    e.preventDefault();
+    const f = e.target;
+    onSave({
+      name: f.name.value.trim(),
+      phone: f.phone.value.trim(),
+      email: f.email.value.trim(),
+      nationalId: f.nationalId.value.trim(),
+      income: Number(f.income.value) || 0,
+      employment: f.employment.value,
+    });
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="card-title">{mode === "edit" ? `Edit ${client.name}` : client.name}</div>
+          <button className="btn btn-ghost" onClick={onClose}>✕</button>
+        </div>
+
+        {mode === "edit" ? (
+          <form onSubmit={handleSave}>
+            <div className="form-grid">
+              <div><label>Full name</label><input name="name" defaultValue={client.name} /></div>
+              <div><label>Phone</label><input name="phone" defaultValue={client.phone} /></div>
+              <div><label>Email</label><input name="email" type="email" defaultValue={client.email} /></div>
+              <div><label>National ID No.</label><input name="nationalId" defaultValue={client.nationalId} /></div>
+              <div><label>Monthly income (KES)</label><input name="income" type="number" defaultValue={client.income} /></div>
+            </div>
+            <label>Employment type</label>
+            <select name="employment" defaultValue={client.employment}>
+              {["Employed", "Self-employed", "Business owner", "Unemployed"].map((o) => <option key={o}>{o}</option>)}
+            </select>
+            <div className="btn-row">
+              <button className="btn btn-green" type="submit">Save Changes</button>
+              <button className="btn btn-ghost" type="button" onClick={onCancelEdit}>Cancel</button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <div className="stat-row"><span>Phone</span><b>{client.phone}</b></div>
+            <div className="stat-row"><span>Email</span><b>{client.email || "—"}</b></div>
+            <div className="stat-row"><span>National ID</span><b>{client.nationalId || "—"}</b></div>
+            <div className="stat-row"><span>Monthly income</span><b>{fmt(client.income)}</b></div>
+            <div className="stat-row"><span>Employment</span><b>{client.employment}</b></div>
+            <div className="stat-row"><span>Client since</span><b>{client.dateJoined || "—"}</b></div>
+            <div className="btn-row" style={{ marginTop: 14 }}>
+              <button className="btn btn-green" onClick={onEdit}>Edit Client</button>
+              <button className="btn btn-error" onClick={onDelete}>Delete Client</button>
+            </div>
+          </>
+        )}
+
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+          <div className="card-title" style={{ marginBottom: 10 }}>📎 Documents</div>
+          {(client.documents || []).length === 0 ? (
+            <div className="empty" style={{ padding: 10 }}>No documents uploaded yet</div>
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              {client.documents.map((d) => (
+                <div className="doc-item" key={d.id}>
+                  <div>
+                    <div>{d.label || d.fileName}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>{new Date(d.uploadedAt).toLocaleDateString()}</div>
+                  </div>
+                  <div className="btn-row">
+                    <button className="btn btn-ghost" onClick={() => onViewDoc(d.id)}>View</button>
+                    <button className="btn btn-error" onClick={() => onDeleteDoc(d.id)}>Remove</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <label>Document label (e.g. National ID Front, Proof of Income)</label>
+          <input value={uploadLabel} onChange={(e) => setUploadLabel(e.target.value)} placeholder="What is this document?" />
+          <input type="file" onChange={handleFileChange} disabled={uploading} accept="image/*,application/pdf" />
+          {uploading && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>Uploading…</div>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1044,7 +1261,7 @@ function Company({ companyTab, setCompanyTab, company, staff, payments, smsConfi
               ))}
             </tbody></table></div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>
-              Note: this is a directory only — tab access isn&apos;t enforced yet since there&apos;s no login system tying a signed-in user to a staff record.
+              Each staff member signs in with the email and password set here, and only sees the tabs checked above. Note: this is enforced in the dashboard itself — a signed-in staff member can still reach any staff-only API route directly regardless of their tabs, since that's a coarser check (any staff vs. no staff) rather than per-tab.
             </div>
           </div>
         </>

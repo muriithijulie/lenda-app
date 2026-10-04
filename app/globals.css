@@ -107,6 +107,12 @@ td{padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;}
 .landing-wrap{max-width:900px;margin:0 auto;padding:32px 20px;}
 [data-card-style="glass"] .card{background:color-mix(in srgb, var(--surface) 55%, transparent);backdrop-filter:blur(12px);}
 [data-card-style="minimal"] .card{background:transparent;border:none;box-shadow:none;}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:200;overflow-y:auto;}
+.modal-panel{background:var(--surface);border:1.5px solid var(--border);border-radius:16px;padding:24px;max-width:640px;width:100%;}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.doc-item{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.doc-item:last-child{border-bottom:none;}
+.search-input{max-width:340px;}
 @media print{
   .sidebar,.topbar,.toast,.btn-row,.card-action,.no-print{display:none !important;}
   .main{margin-left:0 !important;}
