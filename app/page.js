@@ -168,56 +168,96 @@ function AdminApp({ me, onSignOut }) {
     } else showToast((await res.json()).error || "Failed");
   }
 
-  async function updateClient(id, patch) {
-    const res = await api(`/api/clients/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
-    if (res.ok) {
-      showToast("Client updated");
-      refreshAll();
-      return true;
+  // res.json() throws if the body isn't valid JSON (a 404 page, a gateway
+  // timeout, etc.) — without this, that throw was unhandled and the whole
+  // action failed completely silently. This guarantees there's always a
+  // readable message instead of nothing happening.
+  async function safeErrorMessage(res, fallback) {
+    try {
+      const data = await res.json();
+      return data?.error || fallback;
+    } catch (e) {
+      return `${fallback} (server returned ${res.status} ${res.statusText || ""})`;
     }
-    showToast((await res.json()).error || "Could not update client");
-    return false;
+  }
+
+  async function updateClient(id, patch) {
+    try {
+      const res = await api(`/api/clients/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+      if (res.ok) {
+        showToast("Client updated");
+        refreshAll();
+        return true;
+      }
+      showToast(await safeErrorMessage(res, "Could not update client"));
+      return false;
+    } catch (err) {
+      showToast(`Could not reach the server: ${err.message}`);
+      return false;
+    }
   }
 
   async function deleteClient(id) {
-    const res = await api(`/api/clients/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      showToast("Client deleted");
-      refreshAll();
-      return true;
+    try {
+      const res = await api(`/api/clients/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        showToast("Client deleted");
+        refreshAll();
+        return true;
+      }
+      showToast(await safeErrorMessage(res, "Could not delete client"));
+      return false;
+    } catch (err) {
+      showToast(`Could not reach the server: ${err.message}`);
+      return false;
     }
-    showToast((await res.json()).error || "Could not delete client");
-    return false;
   }
 
   async function uploadClientDocument(clientId, file, label) {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("label", label || file.name);
-    const res = await api(`/api/clients/${clientId}/documents`, { method: "POST", body: formData });
-    if (res.ok) {
-      showToast("Document uploaded");
-      refreshAll();
-      return true;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("label", label || file.name);
+      const res = await api(`/api/clients/${clientId}/documents`, { method: "POST", body: formData });
+      if (res.ok) {
+        showToast("Document uploaded");
+        refreshAll();
+        return true;
+      }
+      showToast(await safeErrorMessage(res, "Upload failed"));
+      return false;
+    } catch (err) {
+      showToast(`Could not reach the server: ${err.message}`);
+      return false;
     }
-    showToast((await res.json()).error || "Upload failed");
-    return false;
   }
 
   async function deleteClientDocument(clientId, docId) {
-    const res = await api(`/api/clients/${clientId}/documents/${docId}`, { method: "DELETE" });
-    if (res.ok) {
-      showToast("Document removed");
-      refreshAll();
-    } else showToast((await res.json()).error || "Could not remove document");
+    try {
+      const res = await api(`/api/clients/${clientId}/documents/${docId}`, { method: "DELETE" });
+      if (res.ok) {
+        showToast("Document removed");
+        refreshAll();
+      } else {
+        showToast(await safeErrorMessage(res, "Could not remove document"));
+      }
+    } catch (err) {
+      showToast(`Could not reach the server: ${err.message}`);
+    }
   }
 
   async function viewClientDocument(clientId, docId) {
-    const res = await api(`/api/clients/${clientId}/documents/${docId}`);
-    if (res.ok) {
-      const { url } = await res.json();
-      window.open(url, "_blank", "noopener,noreferrer");
-    } else showToast((await res.json()).error || "Could not open document");
+    try {
+      const res = await api(`/api/clients/${clientId}/documents/${docId}`);
+      if (res.ok) {
+        const { url } = await res.json();
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else {
+        showToast(await safeErrorMessage(res, "Could not open document"));
+      }
+    } catch (err) {
+      showToast(`Could not reach the server: ${err.message}`);
+    }
   }
 
   async function saveRules(e) {
