@@ -1663,34 +1663,63 @@ function LandingForm({ onSave }) {
 // no staff account exists anywhere yet (first-run setup), a staff account
 // exists but this browser isn't signed in (login), or signed in (the app).
 export default function AuthGate() {
-  const [status, setStatus] = useState("loading"); // loading | setup | login | ready
+  const [status, setStatus] = useState("loading"); // loading | setup | login | ready | error
   const [me, setMe] = useState(null);
   const [error, setError] = useState("");
 
   const checkSession = useCallback(async () => {
     setError("");
+    setStatus("loading");
     let supabase;
     try {
       supabase = getSupabaseBrowser();
     } catch (err) {
       setError(err.message);
-      setStatus("login");
+      setStatus("error");
       return;
     }
-    const { data } = await supabase.auth.getSession();
-    if (!data.session) {
-      const bootRes = await fetch("/api/staff/bootstrap").then((r) => r.json()).catch(() => ({ hasStaff: true }));
-      setStatus(bootRes.hasStaff ? "login" : "setup");
-      return;
-    }
-    const meRes = await api("/api/staff/me");
-    if (meRes.ok) {
-      setMe(await meRes.json());
-      setStatus("ready");
-    } else {
-      setError("This account isn't registered as staff.");
-      await supabase.auth.signOut();
-      setStatus("login");
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) {
+        // Not signed in: is this a brand-new install with no staff yet
+        // (show first-run setup) or an existing one (show login)? If this
+        // check itself fails we show the real error rather than guessing —
+        // guessing "login" used to trap people on a fresh install with no
+        // way to create the first admin and no explanation why. Showing the
+        // setup form optimistically is safe: the server independently
+        // refuses to create an admin once any staff member exists.
+        const bootRes = await fetch("/api/staff/bootstrap");
+        let bootData = {};
+        try {
+          bootData = await bootRes.json();
+        } catch (e) {}
+        if (!bootRes.ok) {
+          throw new Error(bootData.error || `Could not check setup status (server returned ${bootRes.status})`);
+        }
+        setStatus(bootData.hasStaff ? "login" : "setup");
+        return;
+      }
+
+      const meRes = await api("/api/staff/me");
+      if (meRes.ok) {
+        setMe(await meRes.json());
+        setStatus("ready");
+      } else if (meRes.status === 401 || meRes.status === 404) {
+        // Genuinely not a staff account (e.g. a client who signed in here).
+        setError("This account isn't registered as staff.");
+        await supabase.auth.signOut();
+        setStatus("login");
+      } else {
+        let msg = "";
+        try {
+          msg = (await meRes.json()).error;
+        } catch (e) {}
+        throw new Error(msg || `Could not load your staff profile (server returned ${meRes.status})`);
+      }
+    } catch (err) {
+      setError(err.message || "Something went wrong");
+      setStatus("error");
     }
   }, []);
 
@@ -1712,6 +1741,15 @@ export default function AuthGate() {
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#080D14" }}>
         <div style={{ color: "#5C7A99" }}>Loading…</div>
       </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <AuthScreen title="⚠️ Something's not right" subtitle="The dashboard couldn't finish loading. Here's what went wrong:">
+        <div style={{ color: "var(--error)", fontSize: 13, marginBottom: 16, wordBreak: "break-word" }}>{error}</div>
+        <button className="btn btn-green" style={{ width: "100%" }} onClick={checkSession}>Try Again</button>
+      </AuthScreen>
     );
   }
 
